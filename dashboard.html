@@ -316,9 +316,6 @@
     transition: all 0.18s ease;
   }
   .detail-edit-button {
-    position: absolute;
-    top: 12px;
-    right: 12px;
     width: 32px;
     height: 32px;
     padding: 0;
@@ -344,12 +341,16 @@
     background: var(--accent-glow);
   }
   .bucket-content-block {
-    position: relative;
-    margin-top: 20px;
+    margin-top: 10px;
   }
-  .bucket-content-block .detail-content {
+  .bucket-content-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin: 2px 2px 8px;
+    min-height: 32px;
+  }
+  .bucket-content-toolbar + .bucket-content-block .detail-content {
     margin-top: 0;
-    padding-right: 54px;
   }
   .content-edit-form {
     margin-top: 12px;
@@ -1905,8 +1906,10 @@ async function showDetail(id) {
         '<div class="field"><label>创建</label>' + (meta.created || '—') + '</div>' +
         '<div class="field"><label>最后活跃</label>' + (meta.last_active || '—') + '</div>' +
       '</div>' +
-      '<div class="bucket-content-block">' +
+      '<div class="bucket-content-toolbar">' +
         '<button id="bucket-content-edit-button" type="button" class="detail-edit-button" onclick="startBucketContentEdit(\'' + id + '\')" aria-label="编辑正文" title="编辑正文">✎</button>' +
+      '</div>' +
+      '<div class="bucket-content-block">' +
         '<div id="bucket-content-view" class="detail-content">' + esc(b.content || '') + '</div>' +
         '<form id="bucket-content-edit" class="content-edit-form hidden" onsubmit="submitBucketContentEdit(event, \'' + id + '\')">' +
           '<textarea name="content">' + esc(b.content || '') + '</textarea>' +
