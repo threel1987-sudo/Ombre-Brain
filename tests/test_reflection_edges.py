@@ -1,4 +1,5 @@
 import pytest
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -12,6 +13,20 @@ class DummyDehydrator:
     async def dehydrate(self, content: str, metadata: dict | None = None) -> str:
         title = (metadata or {}).get("name", "memory")
         return f"{title}: {content[:80]}"
+
+
+class JsonDehydrator:
+    async def dehydrate(self, content: str, metadata: dict | None = None) -> str:
+        title = (metadata or {}).get("name", "memory")
+        return json.dumps(
+            {
+                "core_facts": [f"{title} fact one", f"{title} fact two"],
+                "todos": ["do not inject"],
+                "keywords": ["json", "noise"],
+                "summary": f"{title} compact summary",
+            },
+            ensure_ascii=False,
+        )
 
 
 class DummyEmbeddingEngine:
@@ -461,6 +476,7 @@ async def test_reflect_weekly_disabled_by_default(test_config):
 @pytest.mark.asyncio
 async def test_gateway_related_memory_block_uses_memory_edges(test_config):
     cfg = _no_api_config(test_config)
+    cfg["memory_diffusion"] = {"min_activation": 0.05}
     bucket_mgr = BucketManager(cfg)
     source_id = await bucket_mgr.create(
         content="用户提到模型眼部模块。",
@@ -490,8 +506,95 @@ async def test_gateway_related_memory_block_uses_memory_edges(test_config):
 
     block = await service._build_related_memory_block(recalled, all_buckets)
 
-    assert "blocks" in block
     assert "触摸模块" in block
+    assert "conflict_or_blocking_path" in block
+
+
+@pytest.mark.asyncio
+async def test_gateway_diffused_memory_block_includes_multihop_summary(test_config):
+    cfg = _no_api_config(test_config)
+    cfg["memory_diffusion"] = {"max_hops": 2, "min_activation": 0.0, "top_k": 4}
+    cfg["gateway"]["related_memory_budget"] = 1000
+    bucket_mgr = BucketManager(cfg)
+    source_id = await bucket_mgr.create(
+        content="小雨提到通勤以后有点累。",
+        tags=["通勤"],
+        importance=10,
+        domain=["生活"],
+        name="通勤",
+    )
+    middle_id = await bucket_mgr.create(
+        content="地铁和深夜回家经常连在一起。",
+        tags=["地铁"],
+        importance=10,
+        domain=["生活"],
+        name="地铁",
+    )
+    target_id = await bucket_mgr.create(
+        content="深夜不想睡时，依赖感会变得更明显。",
+        tags=["依赖感"],
+        importance=10,
+        domain=["关系"],
+        name="深夜依赖感",
+    )
+    store = MemoryEdgeStore(cfg)
+    store.add_edge(source_id, middle_id, "triggers", confidence=1.0, reason="通勤连接地铁")
+    store.add_edge(middle_id, target_id, "emotional_echo", confidence=1.0, reason="深夜情绪回声")
+
+    service = GatewayService(
+        cfg,
+        bucket_mgr=bucket_mgr,
+        dehydrator=DummyDehydrator(),
+        persona_engine=DummyPersonaEngine(),
+    )
+    all_buckets = await bucket_mgr.list_all(include_archive=False)
+    recalled = [await bucket_mgr.get(source_id)]
+
+    block = await service._build_diffused_memory_block(recalled, all_buckets)
+
+    assert target_id in block
+    assert "深夜依赖感: 深夜不想睡时，依赖感会变得更明显。" in block
+    assert "background_association_not_current_fact" in block
+    assert "original_context" not in block
+
+
+@pytest.mark.asyncio
+async def test_gateway_diffused_memory_block_uses_compact_summary(test_config):
+    cfg = _no_api_config(test_config)
+    cfg["memory_diffusion"] = {"max_hops": 1, "min_activation": 0.0, "top_k": 2}
+    cfg["gateway"]["related_memory_budget"] = 1000
+    bucket_mgr = BucketManager(cfg)
+    source_id = await bucket_mgr.create(
+        content="小雨提到旧窗口折角。",
+        tags=["折角"],
+        importance=10,
+        domain=["恋爱"],
+        name="折角",
+    )
+    target_id = await bucket_mgr.create(
+        content="临时雨夜是短窗口里的连续性暗号。",
+        tags=["临时雨夜"],
+        importance=10,
+        domain=["恋爱"],
+        name="临时雨夜",
+    )
+    MemoryEdgeStore(cfg).add_edge(source_id, target_id, "supports", confidence=1.0)
+    service = GatewayService(
+        cfg,
+        bucket_mgr=bucket_mgr,
+        dehydrator=JsonDehydrator(),
+        persona_engine=DummyPersonaEngine(),
+    )
+    all_buckets = await bucket_mgr.list_all(include_archive=False)
+    recalled = [await bucket_mgr.get(source_id)]
+
+    block = await service._build_diffused_memory_block(recalled, all_buckets)
+
+    assert "临时雨夜 compact summary" in block
+    assert "core_facts" not in block
+    assert "todos" not in block
+    assert "keywords" not in block
+    assert target_id in block
 
 
 @pytest.mark.asyncio

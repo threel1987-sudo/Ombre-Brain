@@ -24,6 +24,12 @@ from dehydrator import Dehydrator
 from embedding_engine import EmbeddingEngine
 from identity import identity_names
 from gateway_state import GatewayStateStore
+from memory_diffusion import (
+    diffuse_memory,
+    diffusion_options_from_config,
+    path_has_caution,
+    seed_scores_for_buckets,
+)
 from memory_edges import MemoryEdgeStore
 from persona_engine import PersonaStateEngine
 from utils import count_tokens_approx, load_config, setup_logging, strip_wikilinks
@@ -119,6 +125,7 @@ class GatewayService:
         self.favorite_memory_budget = int(self.gateway_cfg.get("favorite_memory_budget", 180))
         self.favorite_memory_max_cards = max(0, int(self.gateway_cfg.get("favorite_memory_max_cards", 1)))
         self.related_memory_budget = int(self.gateway_cfg.get("related_memory_budget", 220))
+        self.diffusion_options = diffusion_options_from_config(config)
         self.core_memory_interval_rounds = max(0, int(self.gateway_cfg.get("core_memory_interval_rounds", 0)))
         self.current_inner_state_interval_rounds = max(
             0, int(self.gateway_cfg.get("current_inner_state_interval_rounds", 15))
@@ -481,7 +488,7 @@ class GatewayService:
                 or self._should_inject_interval(session_id, self.favorite_memory_interval_rounds)
             ):
                 favorite_memory, favorite_ids = await self._build_favorite_memory_block(all_buckets, session_id)
-            related_memory = await self._build_related_memory_block(recalled_buckets, all_buckets)
+            related_memory = await self._build_diffused_memory_block(recalled_buckets, all_buckets)
             injected_ids = list(
                 dict.fromkeys([bucket["id"] for bucket in recalled_buckets] + favorite_ids)
             )
@@ -1949,39 +1956,50 @@ class GatewayService:
             )
         )
 
-    async def _build_related_memory_block(
+    async def _build_diffused_memory_block(
         self,
         recalled_buckets: list[dict],
         all_buckets: list[dict],
     ) -> str:
-        if self.related_memory_budget <= 0 or not recalled_buckets:
+        if (
+            self.related_memory_budget <= 0
+            or not recalled_buckets
+            or not self.diffusion_options.enabled
+            or self.diffusion_options.top_k <= 0
+        ):
             return ""
         recalled_ids = [bucket["id"] for bucket in recalled_buckets if bucket.get("id")]
-        edges = self.memory_edge_store.related_edges(
-            recalled_ids,
-            min_confidence=self.edge_min_confidence,
-            limit_per_source=1,
-        )
-        if not edges:
-            return ""
         bucket_map = {bucket["id"]: bucket for bucket in all_buckets}
         recalled_set = set(recalled_ids)
+        edges = [
+            edge
+            for edge in self.memory_edge_store.list_edges()
+            if float(edge.get("confidence", 0.0)) >= self.edge_min_confidence
+        ]
+        hits = diffuse_memory(
+            seed_scores_for_buckets(recalled_buckets),
+            edges,
+            bucket_map,
+            options=self.diffusion_options,
+            exclude_ids=recalled_set,
+        )
+        if not hits:
+            return ""
         remaining = self.related_memory_budget
         parts = []
-        for edge in edges:
-            target_id = edge.get("target")
-            if target_id in recalled_set:
-                continue
+        for hit in hits:
+            target_id = hit.bucket_id
             target = bucket_map.get(target_id)
             if not target:
                 continue
-            summary = await self._summarize_bucket(target)
-            reason = edge.get("reason") or edge.get("relation_type", "relates_to")
-            line = (
-                f"- {edge.get('source')} -> {target_id} "
-                f"[{edge.get('relation_type')}, confidence={edge.get('confidence')}] "
-                f"{reason}\n  {summary}"
+            raw_summary = await self._summarize_bucket(target)
+            summary = self._compact_diffused_summary(target, raw_summary)
+            caution = (
+                "conflict_or_blocking_path"
+                if path_has_caution(hit.best_path)
+                else "background_association_not_current_fact"
             )
+            line = f"- [bucket_id:{target_id}] {summary} ({caution})"
             tokens = count_tokens_approx(line)
             if tokens > remaining and parts:
                 break
@@ -1993,6 +2011,13 @@ class GatewayService:
             if remaining <= 0:
                 break
         return "\n".join(parts)
+
+    async def _build_related_memory_block(
+        self,
+        recalled_buckets: list[dict],
+        all_buckets: list[dict],
+    ) -> str:
+        return await self._build_diffused_memory_block(recalled_buckets, all_buckets)
 
     async def _select_dynamic_buckets(
         self,
@@ -2148,6 +2173,61 @@ class GatewayService:
             )
         return f"{strip_wikilinks(bucket.get('content', '')).strip()}\n{comment_text}".strip()
 
+    def _bucket_context_snippet(self, bucket: dict, max_chars: int = 180) -> str:
+        text = " ".join(strip_wikilinks(str(bucket.get("content") or "")).split())
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars].rstrip() + "..."
+
+    def _compact_diffused_summary(self, bucket: dict, dehydrated: str, max_chars: int = 180) -> str:
+        raw = str(dehydrated or "").strip()
+        extracted = self._summary_from_jsonish_text(raw)
+        if extracted:
+            return self._clip_text(extracted, max_chars)
+
+        meta = bucket.get("metadata", {}) or {}
+        title = str(meta.get("name") or bucket.get("id") or "memory").strip()
+        context = self._bucket_context_snippet(bucket, max_chars)
+        return self._clip_text(f"{title}: {context}" if context else title, max_chars)
+
+    @staticmethod
+    def _summary_from_jsonish_text(text: str) -> str:
+        if not text:
+            return ""
+        candidates = [text]
+        start = text.find("{")
+        end = text.rfind("}")
+        if 0 <= start < end:
+            candidates.append(text[start:end + 1])
+
+        for candidate in candidates:
+            try:
+                data = json.loads(candidate)
+            except Exception:
+                continue
+            if isinstance(data, dict):
+                for key in ("summary", "memory_summary", "gist"):
+                    value = data.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return " ".join(strip_wikilinks(value).split())
+                core_facts = data.get("core_facts")
+                if isinstance(core_facts, list) and core_facts:
+                    facts = [
+                        " ".join(strip_wikilinks(str(item)).split())
+                        for item in core_facts[:2]
+                        if str(item).strip()
+                    ]
+                    if facts:
+                        return "; ".join(facts)
+        return ""
+
+    @staticmethod
+    def _clip_text(text: str, max_chars: int) -> str:
+        compact = " ".join(strip_wikilinks(str(text or "")).split())
+        if len(compact) <= max_chars:
+            return compact
+        return compact[:max_chars].rstrip() + "..."
+
     async def _summarize_bucket(self, bucket: dict) -> str:
         metadata = {
             key: value
@@ -2205,7 +2285,7 @@ class GatewayService:
 
             add_section("Recent Context", recent_context)
             add_section("Recalled Memory", recalled_memory)
-            add_section("Related Memory", related_memory)
+            add_section("Diffused Memory", related_memory)
             if persona_block.strip():
                 dynamic_sections.extend(["", persona_block])
             add_section("Relationship Weather", relationship_weather)

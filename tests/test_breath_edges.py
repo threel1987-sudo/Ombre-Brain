@@ -1,4 +1,5 @@
 import pytest
+import json
 
 from memory_edges import MemoryEdgeStore
 
@@ -14,6 +15,21 @@ class DummyDecayEngine:
 class DummyDehydrator:
     async def dehydrate(self, content: str, metadata: dict | None = None) -> str:
         return " ".join((content or "").split())
+
+
+class JsonDehydrator:
+    async def dehydrate(self, content: str, metadata: dict | None = None) -> str:
+        name = (metadata or {}).get("name", "memory")
+        return json.dumps(
+            {
+                "core_facts": [f"{name} fact one", f"{name} fact two"],
+                "emotion_state": "quiet",
+                "todos": ["do not inject this in diffused memory"],
+                "keywords": ["json", "noise"],
+                "summary": f"{name} short summary",
+            },
+            ensure_ascii=False,
+        )
 
 
 class DummyEmbeddingEngine:
@@ -143,7 +159,7 @@ async def test_surfacing_appends_related_memory_for_returned_dynamic_bucket(patc
 
     assert "=== 浮现记忆 ===" in result
     assert "[bucket_id:A]" in result
-    assert "=== 关联记忆 ===" in result
+    assert "=== 联想浮现 ===" in result
     assert "[bucket_id:B]" in result
 
 
@@ -163,7 +179,7 @@ async def test_budget_skipped_dynamic_bucket_does_not_emit_related(patch_breath)
     result = await server.breath(max_tokens=5, include_core=False)
 
     assert "[bucket_id:A]" not in result
-    assert "=== 关联记忆 ===" not in result
+    assert "=== 联想浮现 ===" not in result
     assert "[bucket_id:B]" not in result
 
 
@@ -182,10 +198,62 @@ async def test_search_appends_related_memory_and_touches_only_matched_bucket(pat
 
     result = await server.breath(query="A", max_tokens=50)
 
+    assert "=== 直接命中记忆 ===" in result
     assert "[bucket_id:A]" in result
-    assert "=== 关联记忆 ===" in result
+    assert "=== 联想浮现 ===" in result
     assert "[bucket_id:B]" in result
+    assert "背景联想，不代表当前事实" in result
+    assert "当时语境" not in result
     assert bucket_mgr.touched == ["A"]
+
+
+@pytest.mark.asyncio
+async def test_search_diffuses_memory_across_two_hops_with_context(patch_breath):
+    import server
+
+    patch_breath(
+        [
+            _bucket("A", "A direct seed", score=10.0, importance=10),
+            _bucket("B", "B related event context", score=1.0, importance=10),
+            _bucket("C", "C deeper emotional context", score=1.0, importance=10),
+        ],
+        search_ids=["A"],
+        edges=[
+            {"source": "A", "target": "B", "relation_type": "triggers", "confidence": 1.0},
+            {"source": "B", "target": "C", "relation_type": "emotional_echo", "confidence": 1.0},
+        ],
+    )
+
+    result = await server.breath(query="A", max_tokens=500)
+
+    assert "=== 直接命中记忆 ===" in result
+    assert "=== 联想浮现 ===" in result
+    assert "[bucket_id:B]" in result
+    assert "[bucket_id:C]" in result
+    assert "C deeper emotional context" in result
+
+
+@pytest.mark.asyncio
+async def test_diffused_memory_uses_compact_summary_not_full_json(patch_breath, monkeypatch):
+    import server
+
+    patch_breath(
+        [
+            _bucket("A", "A direct seed", score=10.0, importance=10),
+            _bucket("B", "B related event context", score=1.0, importance=10),
+        ],
+        search_ids=["A"],
+        edges=[{"source": "A", "target": "B", "relation_type": "supports", "confidence": 1.0}],
+    )
+    monkeypatch.setattr(server, "dehydrator", JsonDehydrator())
+
+    result = await server.breath(query="A", max_tokens=500)
+    diffused_block = result.split("=== 联想浮现 ===", 1)[1]
+
+    assert "B short summary" in diffused_block
+    assert "core_facts" not in diffused_block
+    assert "todos" not in diffused_block
+    assert "keywords" not in diffused_block
 
 
 @pytest.mark.asyncio
@@ -202,9 +270,52 @@ async def test_search_skips_feel_hits_without_touching(patch_breath):
 
     result = await server.breath(query="hit", max_tokens=50, include_related=False)
 
+    assert "=== 直接命中记忆 ===" in result
     assert "[bucket_id:F]" not in result
     assert "[bucket_id:A]" in result
     assert bucket_mgr.touched == ["A"]
+
+
+@pytest.mark.asyncio
+async def test_search_limits_direct_hits_to_max_results(patch_breath):
+    import server
+
+    patch_breath(
+        [
+            _bucket("A", "A direct hit", score=9.0),
+            _bucket("B", "B direct hit", score=8.0),
+            _bucket("C", "C should stay hidden", score=7.0),
+        ],
+        search_ids=["A", "B", "C"],
+    )
+
+    result = await server.breath(query="hit", max_results=2, max_tokens=50, include_related=False)
+
+    assert "[bucket_id:A]" in result
+    assert "[bucket_id:B]" in result
+    assert "[bucket_id:C]" not in result
+
+
+@pytest.mark.asyncio
+async def test_search_displays_one_direct_hit_but_diffuses_from_seed_set(patch_breath):
+    import server
+
+    patch_breath(
+        [
+            _bucket("A", "A top direct hit", score=10.0),
+            _bucket("B", "B hidden direct seed", score=9.0),
+            _bucket("C", "C diffused from hidden seed", score=1.0),
+        ],
+        search_ids=["A", "B"],
+        edges=[{"source": "B", "target": "C", "relation_type": "supports", "confidence": 1.0}],
+    )
+
+    result = await server.breath(query="hit", max_results=2, max_tokens=500)
+    direct_block = result.split("=== 联想浮现 ===", 1)[0]
+
+    assert "[bucket_id:A]" in direct_block
+    assert "[bucket_id:B]" not in direct_block
+    assert "[bucket_id:C]" in result
 
 
 @pytest.mark.asyncio
@@ -217,12 +328,13 @@ async def test_incoming_edge_renders_left_arrow_from_search_source(patch_breath)
             _bucket("B", "B incoming source", resolved=True),
         ],
         search_ids=["A"],
-        edges=[{"source": "B", "target": "A", "relation_type": "blocks", "confidence": 0.9}],
+        edges=[{"source": "B", "target": "A", "relation_type": "supports", "confidence": 0.9}],
     )
 
     result = await server.breath(query="A", max_tokens=50)
 
-    assert "[A <- B]" in result
+    assert "[bucket_id:B]" in result
+    assert "背景联想，不代表当前事实" in result
 
 
 @pytest.mark.asyncio
@@ -241,7 +353,7 @@ async def test_include_related_false_suppresses_related_block(patch_breath):
     result = await server.breath(query="A", max_tokens=50, include_related=False)
 
     assert "[bucket_id:A]" in result
-    assert "=== 关联记忆 ===" not in result
+    assert "=== 联想浮现 ===" not in result
     assert "[bucket_id:B]" not in result
 
 
@@ -286,7 +398,7 @@ async def test_core_memory_does_not_pull_related_memory_without_dynamic_source(p
     result = await server.breath(max_tokens=500, core_limit=3)
 
     assert "[bucket_id:A]" in result
-    assert "=== 关联记忆 ===" not in result
+    assert "=== 联想浮现 ===" not in result
     assert "[bucket_id:B]" not in result
 
 
@@ -338,3 +450,26 @@ async def test_random_drift_does_not_exceed_remaining_budget(patch_breath, monke
     assert "[bucket_id:A]" in result
     assert "--- 久未碰过 ---" not in result
     assert "B low score drift candidate" not in result
+
+
+@pytest.mark.asyncio
+async def test_related_block_suppresses_random_drift(patch_breath, monkeypatch):
+    import server
+
+    patch_breath(
+        [
+            _bucket("A", "A search hit", score=9.0),
+            _bucket("B", "B related target", score=1.0),
+            _bucket("D", "D drift candidate", score=0.5),
+        ],
+        search_ids=["A"],
+        edges=[{"source": "A", "target": "B", "relation_type": "supports", "confidence": 1.0}],
+    )
+    monkeypatch.setattr(server.random, "random", lambda: 0.0)
+
+    result = await server.breath(query="A", max_tokens=500)
+
+    assert "=== 联想浮现 ===" in result
+    assert "[bucket_id:B]" in result
+    assert "--- 久未碰过 ---" not in result
+    assert "D drift candidate" not in result

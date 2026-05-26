@@ -68,6 +68,12 @@ from dream_engine import DreamEngine
 from embedding_engine import EmbeddingEngine
 from identity import identity_names
 from import_memory import ImportEngine
+from memory_diffusion import (
+    diffuse_memory,
+    diffusion_options_from_config,
+    path_has_caution,
+    seed_scores_for_buckets,
+)
 from memory_edges import MemoryEdgeStore
 from persona_engine import PersonaStateEngine
 from reflection_engine import ReflectionEngine
@@ -1026,6 +1032,63 @@ def _bucket_text_for_embedding(bucket: dict) -> str:
     return f"{strip_wikilinks(bucket.get('content', '')).strip()}\n{comment_text}".strip()
 
 
+def _bucket_context_snippet(bucket: dict, max_chars: int = 180) -> str:
+    text = " ".join(strip_wikilinks(str(bucket.get("content") or "")).split())
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
+
+
+def _compact_diffused_summary(bucket: dict, dehydrated: str, max_chars: int = 180) -> str:
+    raw = str(dehydrated or "").strip()
+    extracted = _summary_from_jsonish_text(raw)
+    if extracted:
+        return _clip_text(extracted, max_chars)
+
+    meta = bucket.get("metadata", {}) or {}
+    title = str(meta.get("name") or bucket.get("id") or "记忆").strip()
+    context = _bucket_context_snippet(bucket, max_chars)
+    return _clip_text(f"{title}: {context}" if context else title, max_chars)
+
+
+def _summary_from_jsonish_text(text: str) -> str:
+    if not text:
+        return ""
+    candidates = [text]
+    start = text.find("{")
+    end = text.rfind("}")
+    if 0 <= start < end:
+        candidates.append(text[start:end + 1])
+
+    for candidate in candidates:
+        try:
+            data = _json_lib.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            for key in ("summary", "memory_summary", "gist"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return " ".join(strip_wikilinks(value).split())
+            core_facts = data.get("core_facts")
+            if isinstance(core_facts, list) and core_facts:
+                facts = [
+                    " ".join(strip_wikilinks(str(item)).split())
+                    for item in core_facts[:2]
+                    if str(item).strip()
+                ]
+                if facts:
+                    return "；".join(facts)
+    return ""
+
+
+def _clip_text(text: str, max_chars: int) -> str:
+    compact = " ".join(strip_wikilinks(str(text or "")).split())
+    if len(compact) <= max_chars:
+        return compact
+    return compact[:max_chars].rstrip() + "..."
+
+
 async def _refresh_bucket_embedding(bucket_id: str) -> bool:
     if not getattr(embedding_engine, "enabled", False):
         return False
@@ -1251,7 +1314,7 @@ async def _merge_or_create(
     return bucket_id, name or bucket_id, False, related_bucket
 
 
-async def _build_mcp_related_memory_block(
+async def _build_mcp_diffused_memory_block(
     source_buckets: list[dict],
     all_buckets: list[dict] | None,
     token_budget: int,
@@ -1275,22 +1338,29 @@ async def _build_mcp_related_memory_block(
         try:
             all_buckets = await bucket_mgr.list_all(include_archive=False)
         except Exception as e:
-            logger.warning(f"Failed to list buckets for related memory / 关联记忆列桶失败: {e}")
+            logger.warning(f"Failed to list buckets for diffused memory / 联想浮现列桶失败: {e}")
             all_buckets = []
 
     bucket_map = {bucket["id"]: bucket for bucket in all_buckets if bucket.get("id")}
-    edges = memory_edge_store.related_edges(
-        source_ids,
-        min_confidence=min_confidence,
-        limit_per_source=limit_per_source,
+    edges = [
+        edge
+        for edge in memory_edge_store.list_edges()
+        if float(edge.get("confidence", 0.0)) >= min_confidence
+    ]
+    hits = diffuse_memory(
+        seed_scores_for_buckets(source_buckets),
+        edges,
+        bucket_map,
+        options=diffusion_options_from_config(config),
+        exclude_ids=source_set,
     )
 
     parts = []
     seen_targets = set()
     remaining = token_budget
-    for edge in edges:
-        target_id = edge.get("target")
-        if not target_id or target_id in source_set or target_id in seen_targets:
+    for hit in hits:
+        target_id = hit.bucket_id
+        if not target_id or target_id in seen_targets:
             continue
 
         target = bucket_map.get(target_id)
@@ -1302,19 +1372,17 @@ async def _build_mcp_related_memory_block(
 
         try:
             clean_meta = {k: v for k, v in meta.items() if k != "tags"}
-            summary = await dehydrator.dehydrate(
+            raw_summary = await dehydrator.dehydrate(
                 _bucket_text_for_embedding(target),
                 clean_meta,
             )
-            arrow = "<-" if edge.get("direction") == "incoming" else "->"
-            confidence = edge.get("confidence", 0.0)
-            relation_type = edge.get("relation_type", "relates_to")
-            reason = edge.get("reason") or relation_type
-            block = (
-                f"[{edge.get('source')} {arrow} {target_id}] "
-                f"[{relation_type}, confidence={confidence}] {reason}\n"
-                f"[bucket_id:{target_id}] {summary}"
+            summary = _compact_diffused_summary(target, raw_summary)
+            caution = (
+                "路径含冲突/阻断，仅作边界背景。"
+                if path_has_caution(hit.best_path)
+                else "背景联想，不代表当前事实。"
             )
+            block = f"- [bucket_id:{target_id}] {summary}（{caution}）"
             block_tokens = count_tokens_approx(block)
             if block_tokens > remaining:
                 break
@@ -1324,7 +1392,7 @@ async def _build_mcp_related_memory_block(
             if remaining <= 0:
                 break
         except Exception as e:
-            logger.warning(f"Failed to build related memory block / 关联记忆构建失败: {e}")
+            logger.warning(f"Failed to build diffused memory block / 联想浮现构建失败: {e}")
             continue
 
     return "\n---\n".join(parts)
@@ -1356,9 +1424,9 @@ async def breath(
 ) -> str:
     """读取记忆,不写入。
     调用方式: 新对话用 breath(is_session_start=True); 查过去用 breath(query="主题词"); 只读模型感受用 breath(domain="feel"); 只读悄悄话用 breath(domain="whisper")。
-    默认只从本次实际返回的普通记忆沿持久化 memory_edges 带一跳关联记忆; embedding 相似边只是检索/图谱参考,不是可手写的记忆关系。
+    默认从本次命中的普通记忆沿持久化 memory_edges 做多跳联想浮现; embedding 相似边只是检索/图谱参考,不是可手写的记忆关系。
     如果夜梦与当前语境共振,breath 会追加 ===== 梦境 ===== 块;梦只浮现一次。
-    include_core/core_limit 控制 pinned/protected 核心准则数量; include_related=False 可关闭关联记忆块。
+    include_core/core_limit 控制 pinned/protected 核心准则数量; include_related=False 可关闭联想浮现块。
     """
     await decay_engine.ensure_started()
     max_results = _int_between(max_results, 20, 1, 50)
@@ -1540,8 +1608,8 @@ async def breath(
         related_block = ""
         related_sources = anchor_buckets + surfaced_buckets
         if include_related and related_sources:
-            related_header_tokens = count_tokens_approx("=== 关联记忆 ===\n")
-            related_block = await _build_mcp_related_memory_block(
+            related_header_tokens = count_tokens_approx("=== 联想浮现 ===\n")
+            related_block = await _build_mcp_diffused_memory_block(
                 related_sources,
                 all_buckets,
                 max(0, token_budget - related_header_tokens),
@@ -1557,7 +1625,7 @@ async def breath(
         if dynamic_results:
             parts.append("=== 浮现记忆 ===\n" + "\n---\n".join(dynamic_results))
         if related_block:
-            parts.append("=== 关联记忆 ===\n" + related_block)
+            parts.append("=== 联想浮现 ===\n" + related_block)
 
         dream_block = await dream_engine.surface_for_breath(
             query="",
@@ -1609,15 +1677,21 @@ async def breath(
     except Exception as e:
         logger.warning(f"Vector search failed, using keyword only / 向量搜索失败: {e}")
 
-    results = []
+    direct_results = []
     token_used = 0
     returned_buckets = []
+    direct_display_limit = 1 if include_related else max_results
     for bucket in matches:
-        if token_used >= max_tokens:
+        if len(returned_buckets) >= max_results:
             break
+        if len(direct_results) < direct_display_limit and token_used >= max_tokens:
+            break
+        if bucket.get("metadata", {}).get("type") == "feel":
+            continue
+        returned_buckets.append(bucket)
+        if len(direct_results) >= direct_display_limit:
+            continue
         try:
-            if bucket.get("metadata", {}).get("type") == "feel":
-                continue
             clean_meta = {k: v for k, v in bucket["metadata"].items() if k != "tags"}
             # --- Memory reconstruction: shift displayed valence by current mood ---
             # --- 记忆重构：根据当前情绪微调展示层 valence（±0.1）---
@@ -1634,17 +1708,17 @@ async def breath(
             if token_used + entry_tokens > max_tokens:
                 break
             await bucket_mgr.touch(bucket["id"])
-            results.append(entry)
-            returned_buckets.append(bucket)
+            direct_results.append(entry)
             token_used += entry_tokens
         except Exception as e:
             logger.warning(f"Failed to dehydrate search result / 检索结果脱水失败: {e}")
             continue
 
+    related_entry = ""
     if include_related and returned_buckets:
-        related_header = "=== 关联记忆 ===\n"
+        related_header = "=== 联想浮现 ===\n"
         related_budget = max_tokens - token_used - count_tokens_approx(related_header)
-        related_block = await _build_mcp_related_memory_block(
+        related_block = await _build_mcp_diffused_memory_block(
             returned_buckets,
             None,
             max(0, related_budget),
@@ -1653,12 +1727,12 @@ async def breath(
         )
         if related_block:
             related_entry = related_header + related_block
-            results.append(related_entry)
             token_used += count_tokens_approx(related_entry)
 
+    drift_entry = ""
     # --- Resurface: when search returns < 3, 40% chance to float dormant memories ---
     # --- 久未触碰浮现：检索结果不足 3 条时，40% 概率漂起旧桶 ---
-    if len(returned_buckets) < 3 and max_tokens > token_used and random.random() < 0.4:
+    if not related_entry and len(returned_buckets) < 3 and max_tokens > token_used and random.random() < 0.4:
         try:
             matched_ids = {b["id"] for b in returned_buckets}
             drifted = await _select_resurface_buckets(
@@ -1688,8 +1762,9 @@ async def breath(
                 if drift_results:
                     drift_entry = "--- 久未碰过 ---\n" + "\n---\n".join(drift_results)
                     if token_used + count_tokens_approx(drift_entry) <= max_tokens:
-                        results.append(drift_entry)
                         token_used += count_tokens_approx(drift_entry)
+                    else:
+                        drift_entry = ""
         except Exception as e:
             logger.warning(f"Resurface failed / 久未触碰浮现失败: {e}")
 
@@ -1701,10 +1776,18 @@ async def breath(
         embedding_engine=embedding_engine,
     )
 
-    if not results:
+    response_parts = []
+    if direct_results:
+        response_parts.append("=== 直接命中记忆 ===\n" + "\n---\n".join(direct_results))
+    if related_entry:
+        response_parts.append(related_entry)
+    if drift_entry:
+        response_parts.append(drift_entry)
+
+    if not response_parts:
         return dream_block or "未找到相关记忆。"
 
-    response_text = "\n---\n".join(results)
+    response_text = "\n\n".join(response_parts)
     if dream_block:
         response_text += "\n\n" + dream_block
     return response_text

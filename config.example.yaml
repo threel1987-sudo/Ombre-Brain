@@ -212,6 +212,27 @@ gateway:
   #   OMBRE_GATEWAY_DEEPSEEK_API_KEY_2
   #   OMBRE_GATEWAY_SILICONFLOW_API_KEY
 
+memory_diffusion:
+  enabled: true
+  max_hops: 2
+  top_k: 4
+  min_activation: 0.18
+  hop_decays: [0.8, 0.6, 0.4, 0.25]
+  decay: 0.55
+  include_incoming: true
+  max_paths_per_hit: 3
+  relation_type_weights:
+    triggers: 1.0
+    causes: 0.95
+    updates: 0.9
+    supports: 0.85
+    promises: 0.9
+    belongs_to: 0.8
+    emotional_echo: 0.95
+    relates_to: 0.7
+    contradicts: 0.45
+    blocks: 0.45
+
 # --- Persona State Engine / 人格状态引擎 ---
 # Tracks slow personality drift, relationship state, and per-session affect.
 # 追踪缓慢人格变化、关系状态，以及按会话保存的短期情绪。
