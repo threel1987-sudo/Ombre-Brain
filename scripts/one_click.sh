@@ -33,6 +33,30 @@ backup_file() {
   printf '已备份 %s -> %s.bak.%s\n' "${path}" "${path}" "${stamp}"
 }
 
+resolve_dir() {
+  local path="$1"
+  (cd "${path}" 2>/dev/null && pwd -P)
+}
+
+path_depth() {
+  local path="${1#/}"
+  local count=0
+  local IFS='/'
+  read -r -a parts <<< "${path}"
+  for part in "${parts[@]}"; do
+    [[ -n "${part}" ]] && ((count += 1))
+  done
+  printf '%s\n' "${count}"
+}
+
+is_too_broad_source_dir() {
+  local path="$1"
+  local depth
+  [[ "${path}" == "/" ]] && return 0
+  depth="$(path_depth "${path}")"
+  (( depth < 2 ))
+}
+
 prompt_text() {
   local label="$1"
   local default="$2"
@@ -1269,6 +1293,89 @@ migration_backup() {
   fi
 }
 
+migration_backup_source_dir() {
+  local source_dir output_dir source_abs output_abs current_abs
+  local stamp source_name safe_name archive tmp_archive
+  local items=()
+
+  source_dir="$(prompt_text '原版 Ombre-Brain 目录' '')"
+  if [[ -z "${source_dir}" ]]; then
+    printf '原版目录不能为空。\n'
+    return 1
+  fi
+  if [[ ! -d "${source_dir}" ]]; then
+    printf '目录不存在：%s\n' "${source_dir}"
+    return 1
+  fi
+
+  source_abs="$(resolve_dir "${source_dir}")" || {
+    printf '无法进入目录：%s\n' "${source_dir}"
+    return 1
+  }
+  if is_too_broad_source_dir "${source_abs}"; then
+    printf '这个目录太大或太泛，不适合作为原版 Ombre-Brain 目录：%s\n' "${source_abs}"
+    printf '请填到具体仓库目录，例如 /opt/Ombre-Brain。\n'
+    return 1
+  fi
+
+  current_abs="$(pwd -P)"
+  if [[ "${source_abs}" == "${current_abs}" ]]; then
+    printf '提示：你正在备份当前脚本所在目录：%s\n' "${source_abs}"
+    if ! prompt_yes_no '确认继续吗' 'n'; then
+      return 0
+    fi
+  fi
+
+  [[ -d "${source_abs}/buckets" ]] && items+=("buckets")
+  [[ -d "${source_abs}/state" ]] && items+=("state")
+  [[ -f "${source_abs}/config.yaml" ]] && items+=("config.yaml")
+  [[ -f "${source_abs}/.env" ]] && items+=(".env")
+  if (( ${#items[@]} == 0 )); then
+    printf '没有找到可备份的 buckets/state/config.yaml/.env。\n'
+    printf '这不像一个 Ombre-Brain 数据目录：%s\n' "${source_abs}"
+    return 1
+  fi
+
+  output_dir="$(prompt_text '备份输出目录' 'state/backups')"
+  mkdir -p "${output_dir}" || return 1
+  output_abs="$(resolve_dir "${output_dir}")" || {
+    printf '无法进入备份输出目录：%s\n' "${output_dir}"
+    return 1
+  }
+  if [[ "${output_abs}" == "${source_abs}" ]]; then
+    printf '备份输出目录不能等于原版目录本身。\n'
+    return 1
+  fi
+
+  stamp="$(date +%Y%m%d_%H%M%S)"
+  source_name="$(basename "${source_abs}")"
+  safe_name="${source_name//[^A-Za-z0-9._-]/_}"
+  archive="${output_abs}/original_ombre_${safe_name}_${stamp}.tar.gz"
+  tmp_archive="$(mktemp)" || return 1
+
+  local tar_args=(-czf "${tmp_archive}")
+  if [[ "${output_abs}" == "${source_abs}/"* ]]; then
+    local exclude_rel="${output_abs#"${source_abs}/"}"
+    tar_args+=(--exclude="${exclude_rel}" --exclude="${exclude_rel}/*")
+  fi
+
+  if (cd "${source_abs}" && tar "${tar_args[@]}" "${items[@]}"); then
+    mv "${tmp_archive}" "${archive}" || {
+      rm -f "${tmp_archive}"
+      printf '移动备份文件失败。\n'
+      return 1
+    }
+  else
+    rm -f "${tmp_archive}"
+    printf '备份失败。\n'
+    return 1
+  fi
+
+  printf '已备份原版目录：%s\n' "${source_abs}"
+  printf '包含内容：%s\n' "${items[*]}"
+  printf '已写入备份：%s\n' "${archive}"
+}
+
 migration_plan_feels() {
   migration_prepare_target "旧 feel 迁移审阅" || return 1
   local limit state_dir mapping review plan_json
@@ -1372,33 +1479,35 @@ migration_menu() {
     line
     printf '==== 池又雨二改版 Ombre 原版迁移 ====\n'
     printf '1. 检查旧部署和迁移状态\n'
-    printf '2. 备份 buckets/state\n'
-    printf '3. 生成新版 config/env（走首次部署向导）\n'
-    printf '4. 生成旧 feel 审阅表和 mapping\n'
-    printf '5. 逐条确认旧 feel mapping\n'
-    printf '6. 预演已确认 mapping 写入年轮\n'
-    printf '7. 应用已确认 mapping 写入年轮\n'
-    printf '8. 迁移后重建向量库\n'
-    printf '9. 预演清理已迁移旧 feel\n'
-    printf '10. 删除已迁移旧 feel\n'
+    printf '2. 备份当前部署 buckets/state\n'
+    printf '3. 备份指定原版目录\n'
+    printf '4. 生成新版 config/env（走首次部署向导）\n'
+    printf '5. 生成旧 feel 审阅表和 mapping\n'
+    printf '6. 逐条确认旧 feel mapping\n'
+    printf '7. 预演已确认 mapping 写入年轮\n'
+    printf '8. 应用已确认 mapping 写入年轮\n'
+    printf '9. 迁移后重建向量库\n'
+    printf '10. 预演清理已迁移旧 feel\n'
+    printf '11. 删除已迁移旧 feel\n'
     printf '0. 返回上一级\n'
-    if ! read -r -p '输入（0-10）：' choice; then
+    if ! read -r -p '输入（0-11）：' choice; then
       printf '\n'
       return 0
     fi
     case "${choice}" in
       1) migration_inspect; pause ;;
       2) migration_backup; pause ;;
-      3) first_deploy; pause ;;
-      4) migration_plan_feels; pause ;;
-      5) migration_review_feels_interactive; pause ;;
-      6) migration_apply_feels_dry_run; pause ;;
-      7) migration_apply_feels; pause ;;
-      8) migration_rebuild_embeddings; pause ;;
-      9) migration_cleanup_feels_dry_run; pause ;;
-      10) migration_cleanup_feels_apply; pause ;;
+      3) migration_backup_source_dir; pause ;;
+      4) first_deploy; pause ;;
+      5) migration_plan_feels; pause ;;
+      6) migration_review_feels_interactive; pause ;;
+      7) migration_apply_feels_dry_run; pause ;;
+      8) migration_apply_feels; pause ;;
+      9) migration_rebuild_embeddings; pause ;;
+      10) migration_cleanup_feels_dry_run; pause ;;
+      11) migration_cleanup_feels_apply; pause ;;
       0) return 0 ;;
-      *) printf '请输入 0-10。\n' ;;
+      *) printf '请输入 0-11。\n' ;;
     esac
   done
 }
