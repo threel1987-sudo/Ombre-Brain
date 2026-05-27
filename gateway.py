@@ -31,6 +31,7 @@ from memory_diffusion import (
     seed_scores_for_buckets,
 )
 from memory_edges import MemoryEdgeStore
+from memory_nodes import MemoryNodeStore
 from persona_engine import PersonaStateEngine
 from utils import count_tokens_approx, load_config, setup_logging, strip_wikilinks
 
@@ -76,6 +77,7 @@ class GatewayService:
         embedding_engine: EmbeddingEngine | None = None,
         state_store: GatewayStateStore | None = None,
         persona_engine: PersonaStateEngine | None = None,
+        memory_node_store: MemoryNodeStore | None = None,
         http_client: httpx.AsyncClient | None = None,
     ):
         self.config = config
@@ -85,6 +87,7 @@ class GatewayService:
         self.dehydrator = dehydrator or Dehydrator(config)
         self.embedding_engine = embedding_engine or EmbeddingEngine(config)
         self.memory_edge_store = MemoryEdgeStore(config)
+        self.memory_node_store = memory_node_store or MemoryNodeStore(config)
         self.state_store = state_store or GatewayStateStore(
             os.path.join(config["buckets_dir"], "gateway_state.db")
         )
@@ -1971,6 +1974,14 @@ class GatewayService:
         recalled_ids = [bucket["id"] for bucket in recalled_buckets if bucket.get("id")]
         bucket_map = {bucket["id"]: bucket for bucket in all_buckets}
         recalled_set = set(recalled_ids)
+        node_salience = None
+        if self._node_facets_enabled():
+            try:
+                self.memory_node_store.bulk_upsert(list(bucket_map.values()))
+                node_salience = self.memory_node_store.node_salience
+            except Exception as exc:
+                logger.warning("Gateway memory node refresh failed: %s", exc)
+
         edges = [
             edge
             for edge in self.memory_edge_store.list_edges()
@@ -1982,6 +1993,7 @@ class GatewayService:
             bucket_map,
             options=self.diffusion_options,
             exclude_ids=recalled_set,
+            node_salience=node_salience,
         )
         if not hits:
             return ""
@@ -2011,6 +2023,15 @@ class GatewayService:
             if remaining <= 0:
                 break
         return "\n".join(parts)
+
+    def _node_facets_enabled(self) -> bool:
+        cfg = self.config.get("node_facets", {}) or {}
+        if not isinstance(cfg, dict):
+            return True
+        value = cfg.get("enabled", True)
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "no", "off"}
+        return bool(value)
 
     async def _build_related_memory_block(
         self,

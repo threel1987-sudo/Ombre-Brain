@@ -78,6 +78,12 @@ def load_config(config_path: str = None) -> dict:
             "max_count": 24,
             "min_age_hours": 24,
         },
+        "node_facets": {
+            "enabled": True,
+            "store": "sqlite",
+            "salience_min": 0.2,
+            "salience_max": 1.3,
+        },
         "gateway": {
             "host": "0.0.0.0",
             "port": 8010,

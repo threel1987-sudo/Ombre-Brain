@@ -75,6 +75,7 @@ from memory_diffusion import (
     seed_scores_for_buckets,
 )
 from memory_edges import MemoryEdgeStore
+from memory_nodes import MemoryNodeStore
 from persona_engine import PersonaStateEngine
 from reflection_engine import ReflectionEngine
 from utils import (
@@ -101,6 +102,7 @@ embedding_engine = EmbeddingEngine(config)            # Embedding engine / 向�
 import_engine = ImportEngine(config, bucket_mgr, dehydrator, embedding_engine)  # Import engine / 导入引擎
 persona_engine = PersonaStateEngine(config)           # Persona state engine / 人格状态引擎
 memory_edge_store = MemoryEdgeStore(config)            # Explicit memory relationship edges / 显式记忆关系边
+memory_node_store = MemoryNodeStore(config)            # Computable memory node index / 可计算记忆节点
 reflection_engine = ReflectionEngine(config)           # Reflection worker / 关系天气与关系整理
 dream_engine = DreamEngine(config)                     # Night dream worker / 夜梦
 
@@ -1342,6 +1344,14 @@ async def _build_mcp_diffused_memory_block(
             all_buckets = []
 
     bucket_map = {bucket["id"]: bucket for bucket in all_buckets if bucket.get("id")}
+    node_salience = None
+    if _node_facets_enabled(config):
+        try:
+            memory_node_store.bulk_upsert(list(bucket_map.values()))
+            node_salience = _node_salience_lookup
+        except Exception as e:
+            logger.warning(f"Failed to refresh memory nodes / 记忆节点刷新失败: {e}")
+
     edges = [
         edge
         for edge in memory_edge_store.list_edges()
@@ -1353,6 +1363,7 @@ async def _build_mcp_diffused_memory_block(
         bucket_map,
         options=diffusion_options_from_config(config),
         exclude_ids=source_set,
+        node_salience=node_salience,
     )
 
     parts = []
@@ -1396,6 +1407,17 @@ async def _build_mcp_diffused_memory_block(
             continue
 
     return "\n---\n".join(parts)
+
+
+def _node_facets_enabled(cfg: dict | None) -> bool:
+    node_cfg = (cfg or {}).get("node_facets", {}) or {}
+    if isinstance(node_cfg, dict):
+        return _bool_value(node_cfg.get("enabled", True), True)
+    return True
+
+
+def _node_salience_lookup(bucket_id: str, bucket: dict) -> float:
+    return memory_node_store.node_salience(bucket_id, bucket)
 
 
 # =============================================================

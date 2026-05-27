@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 
 DEFAULT_HOP_DECAYS = (0.8, 0.6, 0.4, 0.25)
@@ -17,6 +17,8 @@ DEFAULT_RELATION_TYPE_WEIGHTS = {
     "contradicts": 0.45,
     "blocks": 0.45,
 }
+
+NodeSalienceFn = Callable[[str, dict], float]
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,7 @@ def diffuse_memory(
     bucket_map: dict[str, dict],
     options: DiffusionOptions | None = None,
     exclude_ids: set[str] | None = None,
+    node_salience: NodeSalienceFn | None = None,
 ) -> list[DiffusionHit]:
     options = options or DiffusionOptions()
     if not options.enabled or options.top_k <= 0 or options.max_hops <= 0:
@@ -158,7 +161,11 @@ def diffuse_memory(
                     options.relation_type_weights.get("relates_to", 0.7),
                 )
                 next_strength = state.path_strength * step.confidence * relation_weight
-                activation = next_strength * hop_weight * _node_salience(target)
+                activation = (
+                    next_strength
+                    * hop_weight
+                    * _resolved_node_salience(target_id, target, node_salience)
+                )
                 if activation < options.min_activation:
                     continue
 
@@ -307,6 +314,19 @@ def _node_salience(bucket: dict) -> float:
     if meta.get("pinned") or meta.get("protected"):
         importance_score = max(importance_score, 0.95)
     return 0.65 + importance_score * 0.35
+
+
+def _resolved_node_salience(
+    bucket_id: str,
+    bucket: dict,
+    node_salience: NodeSalienceFn | None,
+) -> float:
+    if node_salience:
+        try:
+            return _clamp(node_salience(bucket_id, bucket), 0.2, 1.5)
+        except Exception:
+            pass
+    return _node_salience(bucket)
 
 
 def _bucket_label(bucket_id: str, bucket_map: dict[str, dict]) -> str:

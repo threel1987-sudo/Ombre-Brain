@@ -68,6 +68,27 @@ def test_diffusion_accumulates_multiple_paths_to_same_node():
     assert len(hits[0].paths) == 2
 
 
+def test_diffusion_uses_external_node_salience():
+    bucket_map = {bucket_id: _bucket(bucket_id) for bucket_id in ["A", "B", "C"]}
+    edges = [
+        {"source": "A", "target": "B", "relation_type": "triggers", "confidence": 1.0},
+        {"source": "A", "target": "C", "relation_type": "triggers", "confidence": 1.0},
+    ]
+
+    hits = diffuse_memory(
+        {"A": 1.0},
+        edges,
+        bucket_map,
+        options=DiffusionOptions(max_hops=1, top_k=10, min_activation=0.0),
+        node_salience=lambda bucket_id, _bucket: 0.5 if bucket_id == "B" else 1.3,
+    )
+
+    activations = {hit.bucket_id: hit.activation for hit in hits}
+    assert activations["B"] == pytest.approx(0.4)
+    assert activations["C"] == pytest.approx(1.04)
+    assert hits[0].bucket_id == "C"
+
+
 def test_diffusion_skips_seed_and_feel_targets():
     bucket_map = {
         "A": _bucket("A"),

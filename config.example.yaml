@@ -233,6 +233,12 @@ memory_diffusion:
     contradicts: 0.45
     blocks: 0.45
 
+node_facets:
+  enabled: true
+  store: "sqlite"
+  salience_min: 0.2
+  salience_max: 1.3
+
 # --- Persona State Engine / 人格状态引擎 ---
 # Tracks slow personality drift, relationship state, and per-session affect.
 # 追踪缓慢人格变化、关系状态，以及按会话保存的短期情绪。

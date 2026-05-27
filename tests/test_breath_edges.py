@@ -2,6 +2,7 @@ import pytest
 import json
 
 from memory_edges import MemoryEdgeStore
+from memory_nodes import MemoryNodeStore
 
 
 class DummyDecayEngine:
@@ -135,6 +136,16 @@ def patch_breath(monkeypatch, tmp_path):
         monkeypatch.setattr(server, "dehydrator", DummyDehydrator())
         monkeypatch.setattr(server, "embedding_engine", DummyEmbeddingEngine())
         monkeypatch.setattr(server, "memory_edge_store", _edge_store(tmp_path, edges))
+        monkeypatch.setattr(
+            server,
+            "memory_node_store",
+            MemoryNodeStore(
+                {
+                    "state_dir": str(tmp_path / "state"),
+                    "buckets_dir": str(tmp_path / "buckets"),
+                }
+            ),
+        )
         monkeypatch.setattr(server.random, "random", lambda: 1.0)
         monkeypatch.setattr(server.random, "shuffle", lambda items: None)
         monkeypatch.setattr(server, "count_tokens_approx", token_counter or (lambda text: 1))
@@ -204,6 +215,7 @@ async def test_search_appends_related_memory_and_touches_only_matched_bucket(pat
     assert "[bucket_id:B]" in result
     assert "背景联想，不代表当前事实" in result
     assert "当时语境" not in result
+    assert server.memory_node_store.get("B") is not None
     assert bucket_mgr.touched == ["A"]
 
 
