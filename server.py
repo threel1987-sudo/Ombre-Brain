@@ -77,6 +77,7 @@ from memory_diffusion import (
     seed_scores_for_buckets,
 )
 from memory_edges import MemoryEdgeStore
+from memory_moments import MemoryMomentStore
 from memory_nodes import MemoryNodeStore
 from persona_engine import PersonaStateEngine
 from reflection_engine import ReflectionEngine
@@ -105,6 +106,7 @@ import_engine = ImportEngine(config, bucket_mgr, dehydrator, embedding_engine)  
 persona_engine = PersonaStateEngine(config)           # Persona state engine / 人格状态引擎
 memory_edge_store = MemoryEdgeStore(config)            # Explicit memory relationship edges / 显式记忆关系边
 memory_node_store = MemoryNodeStore(config)            # Computable memory node index / 可计算记忆节点
+memory_moment_store = MemoryMomentStore(config)        # Structured bucket body/comment moment index / 记忆片段索引
 reflection_engine = ReflectionEngine(config)           # Reflection worker / 关系天气与关系整理
 dream_engine = DreamEngine(config)                     # Night dream worker / 夜梦
 
@@ -1628,6 +1630,74 @@ async def inspect_diffusion(
         "seeds": seed_payload,
         "hits": hit_payload,
         "warnings": warnings,
+    }
+
+
+def _inspect_moment_payload(moment: dict, *, include_text: bool) -> dict:
+    text = str(moment.get("text") or "")
+    payload = {
+        "moment_id": moment.get("moment_id"),
+        "bucket_id": moment.get("bucket_id"),
+        "section": moment.get("section"),
+        "ordinal": moment.get("ordinal"),
+        "source": moment.get("source"),
+        "source_id": moment.get("source_id"),
+        "text_hash": moment.get("text_hash"),
+        "text_length": len(text),
+        "metadata": moment.get("metadata", {}),
+        "created_at": moment.get("created_at"),
+        "updated_at": moment.get("updated_at"),
+    }
+    if include_text:
+        payload["text"] = text
+    else:
+        payload["text_preview"] = _clip_text(" ".join(text.split()), 240)
+    return payload
+
+
+@mcp.tool()
+async def inspect_moments(bucket_id: str = "", limit: int = 20) -> dict:
+    """只读诊断 bucket 如何被拆成 moment；写入/刷新 SQLite 索引，不 touch bucket。"""
+    bucket_id = str(bucket_id or "").strip()
+    limit = _int_between(limit, 20, 1, 200)
+
+    if bucket_id:
+        if not MEMORY_ID_RE.fullmatch(bucket_id):
+            return {"status": "error", "error": "invalid bucket_id"}
+        bucket = await bucket_mgr.get(bucket_id)
+        if not bucket:
+            return {"status": "error", "error": "not_found", "bucket_id": bucket_id}
+        moments = memory_moment_store.upsert_bucket(bucket)
+        meta = bucket.get("metadata", {}) or {}
+        return {
+            "status": "ok",
+            "mode": "bucket",
+            "bucket_id": bucket_id,
+            "name": str(meta.get("name") or bucket.get("name") or bucket_id),
+            "count": len(moments),
+            "db_path": memory_moment_store.db_path,
+            "moments": [
+                _inspect_moment_payload(moment, include_text=True)
+                for moment in moments[:limit]
+            ],
+        }
+
+    buckets = await bucket_mgr.list_all(include_archive=False)
+    indexed = memory_moment_store.bulk_upsert(buckets)
+    stats = memory_moment_store.stats()
+    sample = memory_moment_store.sample(limit)
+    return {
+        "status": "ok",
+        "mode": "bulk",
+        "indexed_buckets": indexed["buckets"],
+        "indexed_moments": indexed["moments"],
+        "total_buckets": stats["buckets"],
+        "total_moments": stats["moments"],
+        "db_path": memory_moment_store.db_path,
+        "sample": [
+            _inspect_moment_payload(moment, include_text=False)
+            for moment in sample
+        ],
     }
 
 

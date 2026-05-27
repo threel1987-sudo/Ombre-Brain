@@ -2,6 +2,7 @@ import pytest
 import json
 
 from memory_edges import MemoryEdgeStore
+from memory_moments import MemoryMomentStore
 from memory_nodes import MemoryNodeStore
 
 
@@ -146,6 +147,16 @@ def patch_breath(monkeypatch, tmp_path):
                 }
             ),
         )
+        monkeypatch.setattr(
+            server,
+            "memory_moment_store",
+            MemoryMomentStore(
+                {
+                    "state_dir": str(tmp_path / "state"),
+                    "buckets_dir": str(tmp_path / "buckets"),
+                }
+            ),
+        )
         monkeypatch.setattr(server.random, "random", lambda: 1.0)
         monkeypatch.setattr(server.random, "shuffle", lambda items: None)
         monkeypatch.setattr(server, "count_tokens_approx", token_counter or (lambda text: 1))
@@ -254,6 +265,44 @@ async def test_inspect_diffusion_exposes_scores_facets_and_paths(patch_breath):
     assert hit["path_ids"] == ["A", "B"]
     assert "supports:1.00" in hit["path"]
     assert hit["paths"][0]["steps"][0]["relation_type"] == "supports"
+    assert bucket_mgr.touched == []
+
+
+@pytest.mark.asyncio
+async def test_inspect_moments_indexes_bucket_sections_and_comments(patch_breath):
+    import server
+
+    bucket = _bucket(
+        "A",
+        "\n".join(
+            [
+                "## original",
+                "小雨说：99。",
+                "",
+                "## feeling",
+                "这条记忆有甜味。",
+            ]
+        ),
+    )
+    bucket["metadata"]["comments"] = [
+        {
+            "id": "c1",
+            "created": "2026-05-27T01:00:00+00:00",
+            "author": "Haven",
+            "kind": "feel",
+            "content": "年轮也要进 moment。",
+        }
+    ]
+    bucket_mgr = patch_breath([bucket])
+
+    result = await server.inspect_moments(bucket_id="A")
+
+    assert result["status"] == "ok"
+    assert result["mode"] == "bucket"
+    assert result["count"] == 3
+    assert [moment["section"] for moment in result["moments"]] == ["original", "feeling", "comment"]
+    assert result["moments"][0]["text"] == "小雨说：99。"
+    assert result["moments"][2]["metadata"]["comment_kind"] == "feel"
     assert bucket_mgr.touched == []
 
 

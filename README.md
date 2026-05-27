@@ -54,6 +54,7 @@
 | 多上游模型路由和备用 key | `gateway.upstreams` 可配置多个 OpenAI-compatible provider，按请求里的 `model` 路由；同一上游可配置多个 key，失败时自动尝试下一个 | `gateway.py`、`config.example.yaml` |
 | 工具调用和流式兼容 | 透传 `tools / tool_choice / tool_calls`，支持 SSE 流式响应，兼容部分 reasoning_content 场景；Persona post-reply 评估会跳过带 `tool_calls` 的 assistant 中间态，只评估最终自然语言回复 | `gateway.py` |
 | Memory Edge / Node | 自动生成显式记忆关系边；`memory_nodes.sqlite` 为 bucket 生成 salience 与 facets，Gateway 和 `breath()` 可沿边做多跳联想浮现 | `memory_edges.py`、`memory_nodes.py`、`memory_diffusion.py`、`reflection_engine.py` |
+| Memory Moment | 将 Markdown bucket 解析成 `body / moment / original / context / feeling / followup / affect_anchor / favorite_reason / comment` 等片段，写入 `memory_moments.sqlite`，旧格式桶和年轮 comments 兼容 | `memory_moments.py`、`server.py` |
 | 长期锚点 Anchor | 介于普通浮现和 pinned/permanent 之间的长期记忆位。`anchor=true` 的普通 bucket 不混入普通权重池，`breath()` 会用独立槽位少量带出，适合经过时间验证、未来仍需要被想起的关系锚点或项目锚点 | `server.py`、`dashboard.html` |
 | Relationship Weather | 日印象保存为 `type=feel`，默认不单独注入，可在面板观察或按配置开启注入 | `reflection_engine.py` |
 | Night Dream | 后台夜里用小模型生成潜伏梦，默认走 DeepSeek 官方 API `deepseek-v4-flash`；素材来自最近普通记忆和 whisper，素材够时按每日概率决定是否入梦；`breath()` 命中共振时按 `===== 梦境 =====` 块浮现一次，Dashboard 只显示做梦记录不展示正文 | `dream_engine.py`、`server.py`、`dashboard.html` |
@@ -621,6 +622,8 @@ rm /srv/ombre-brain/state/.dashboard_auth.json
 | `introspection` | 原 `dream()` 自省入口的新名字，不替代日记，也不是梦境生成；原 `dream()` 入口仍可用 |
 | `resurface` | 只读浮现久未触碰的旧记忆 |
 | `reflect` | 生成 daily relationship_weather feel |
+| `inspect_diffusion` | 只读诊断 query 如何沿 memory_edges 扩散 |
+| `inspect_moments` | 只读诊断 bucket 如何被拆成 moment，并刷新 `memory_moments.sqlite` |
 
 原 `dream()` 入口仍可用，会提示新名字并返回 `introspection()` 内容；真正的夜梦不需要客户端主动调用。
 
@@ -724,6 +727,45 @@ edge_min_confidence: float = 0.55
   ]
 }
 ```
+
+#### `inspect_moments(...) -> dict`
+
+只读诊断 bucket 如何被解析成片段。不修改 bucket，不 touch 记忆；只刷新 `${state_dir}/memory_moments.sqlite`。
+
+输入：
+
+```text
+bucket_id: str = ""   # 有值=只索引并返回这个 bucket；空=索引所有 active bucket 并返回 sample
+limit: int = 20
+```
+
+结构化正文可写成：
+
+```md
+## moment
+一句可扩散的短事实。
+
+## original
+当时的对话原文或关键原句。
+
+## context
+开头背景、命中词附近语境、结尾结果等。
+
+## feeling
+当时感受或机自我反思。
+
+## followup
+后续选择、承诺、待办。
+
+### affect_anchor
+> 具体情境
+> 和弦 -> 情绪移动
+
+### 喜欢它的原因
+为什么这条是 favorite。
+```
+
+旧格式正文没有这些标题时，会整体索引为 `body`；如果正文已有 `### affect_anchor` 或 `### 喜欢它的原因`，会单独拆成对应 moment。`metadata.comments` 会索引为 `comment`，保留年轮作者、kind、valence/arousal 等元信息。`haven_favorite / flavor_* / anchor / pinned` 等仍作为 bucket 级温度标记写进 moment metadata，不会降级成普通文本。
 
 #### `resurface(...) -> str`
 
