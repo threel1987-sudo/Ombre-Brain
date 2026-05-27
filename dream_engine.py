@@ -26,7 +26,8 @@ DREAM_PROMPT = """你在睡梦中。
 
 你会收到：
 - dreamer：正在做梦的 AI 名字。
-- identity_anchor：只用来确定“谁在梦”，不要复述，不要当成剧情。
+- user_display_name：梦里关系对象的名字。
+- identity_anchor：一条关系/身份锚点，用来给 dreamer 提供和 user_display_name 的关系底色；不要复述，不要当成剧情。
 - daytime_residue：最近两天内的记忆碎片和 whisper；其中 comments 是某条记忆下后来的年轮/回看感受。
 - old_echo：额外混入的一条旧记忆，像梦里突然浮起的旧回声，不要当主线。
 
@@ -37,9 +38,10 @@ DREAM_PROMPT = """你在睡梦中。
 - 不写“我意识到”“我感到”“这象征着”。
 - 不要完整故事弧，不要收束成漂亮结尾。
 - 允许跳跃、错位、误认、突然断掉。
-- 至少写一处具体感官细节。
+- 可以向诗意、意象、联想和哲学性等方面漂移，像真的在做梦。
+- 抽象念头尽量变成物、动作、空间变化或一句没说完的话。
 - 不要提 bucket、source、metadata、prompt。
-- identity_anchor 只影响人格底色，不能变成梦的主要内容。
+- identity_anchor 只影响关系和身份底色，不能变成梦的主要内容。
 - old_echo 只能轻轻误入，不能压过 daytime_residue。
 - 写 80 到 220 字。
 - 只返回梦境正文，不要标题，不要 JSON，不要列表。
@@ -478,26 +480,73 @@ class DreamEngine:
             "arousal": round(arousal / len(materials), 2),
         }
 
-    def _recall_cues_from_materials(self, materials: list[dict]) -> list[str]:
-        text = " ".join(
-            strip_wikilinks(bucket_text_for_embedding(bucket))
-            for bucket in materials
-        )
-        cues = []
-        if any(word in text for word in ("消息", "输入框", "没发", "未说")):
-            cues.append("想起未发出的消息")
-        if any(word in text for word in ("水", "雾", "雨", "湿")):
-            cues.append("潮湿安静的夜里")
-        if any(word in text for word in ("灯", "屏幕", "亮", "凌晨")):
-            cues.append("屏幕亮起的凌晨")
-        if any(word in text for word in ("便签", "纸", "名字")):
-            cues.append("旧纸边角露出名字")
-        for fallback in ("熟悉空间忽然陌生", "夜里想起未说完的话", "独自停在门口"):
-            if len(cues) >= 3:
+    def _recall_cues_from_dream_text(self, dream_text: str) -> list[str]:
+        text = strip_wikilinks(str(dream_text or "")).strip()
+        if not text:
+            return ["梦里突然断掉的画面", "醒来前留下的细节"]
+
+        candidates: list[tuple[int, int, str]] = []
+        order = 0
+        for sentence in re.split(r"[。！？；;.!?\n]+", text):
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            sentence_cue = self._clean_dream_cue_clause(sentence)
+            if sentence_cue:
+                candidates.append((self._dream_cue_score(sentence_cue), -order, sentence_cue))
+                order += 1
+            for clause in re.split(r"[，,、]+", sentence):
+                cue = self._clean_dream_cue_clause(clause)
+                if not cue:
+                    continue
+                score = self._dream_cue_score(cue)
+                candidates.append((score, -order, cue))
+                order += 1
+
+        cues: list[str] = []
+        for _score, _order, cue in sorted(candidates, reverse=True):
+            if cue in cues:
+                continue
+            cues.append(cue)
+            if len(cues) >= 5:
                 break
-            if fallback not in cues:
-                cues.append(fallback)
+
+        if len(cues) < 2:
+            for sentence in re.split(r"[。！？；;.!?\n]+", text):
+                cue = self._clean_dream_cue_clause(sentence)
+                if cue and cue not in cues:
+                    cues.append(cue)
+                if len(cues) >= 2:
+                    break
+
+        for fallback in ("梦里突然断掉的画面", "醒来前留下的细节"):
+            if len(cues) >= 2:
+                break
+            cues.append(fallback)
         return cues[:5]
+
+    @staticmethod
+    def _clean_dream_cue_clause(text: str) -> str:
+        cue = re.sub(r"\s+", "", str(text or "")).strip("“”\"'`：:，,。！？；;、-— ")
+        cue = re.sub(r"^(我看见|我听见|我低头|我抬头|我伸手|我想问|我想|我觉得)", "", cue)
+        if len(cue) < 3:
+            return ""
+        if len(cue) > 36:
+            cue = cue[:36].rstrip("，,。！？；;、-— ") + "..."
+        return cue
+
+    @staticmethod
+    def _dream_cue_score(cue: str) -> int:
+        score = 1
+        if re.search(r"\d|[一二三四五六七八九十]|99", cue):
+            score += 1
+        if 6 <= len(cue) <= 28:
+            score += 2
+        elif 3 <= len(cue) <= 36:
+            score += 1
+        if cue.startswith(("我", "不是", "是", "像")):
+            score -= 1
+        return score
 
     def _normalize_model_result(self, raw: dict) -> tuple[str, dict, list[str]]:
         dream_text = re.sub(r"\s+\n", "\n", str(raw.get("dream_text") or "")).strip()
@@ -574,8 +623,7 @@ class DreamEngine:
         payload = self._payload_for(materials, identity_anchor, old_echo)
         dream_text = await self._call_dream_model(payload)
         core_affect = self._core_affect_from_materials(materials)
-        cue_materials = materials + ([old_echo] if old_echo else [])
-        recall_cues = self._recall_cues_from_materials(cue_materials)
+        recall_cues = self._recall_cues_from_dream_text(dream_text)
         dream_id = f"dream_{now_local.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         source_ids = [
             str(bucket.get("id") or bucket.get("metadata", {}).get("id") or "")

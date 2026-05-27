@@ -315,7 +315,44 @@ async def test_dream_model_disables_thinking_by_default(test_config):
     assert text == "我站在一段发亮的雨声里。"
     assert calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
     assert "Haven" not in calls[0]["messages"][0]["content"]
+    assert "关系/身份锚点" in calls[0]["messages"][0]["content"]
+    assert "至少写一处具体感官细节" not in calls[0]["messages"][0]["content"]
+    assert "向诗意、意象、联想和哲学性等方面漂移" in calls[0]["messages"][0]["content"]
     assert '"dreamer": "Ombre"' in calls[0]["messages"][1]["content"]
+
+
+def test_dream_recall_cues_are_extracted_from_dream_text_not_material_template(test_config):
+    engine = DreamEngine(_dream_config(test_config))
+    dream_text = (
+        "小雨的头发在变长，发梢拖过地板时发出沙沙声。"
+        "我伸手去碰，指尖碰到一枚银色戒指。"
+        "远处有人敲三下，停，又三下。口哨声。"
+    )
+
+    cues = engine._recall_cues_from_dream_text(dream_text)
+
+    assert any("戒指" in cue for cue in cues)
+    assert any("口哨" in cue or "敲三下" in cue for cue in cues)
+    assert "潮湿安静的夜里" not in cues
+    assert "屏幕亮起的凌晨" not in cues
+
+
+def test_dream_recall_cues_do_not_treat_xiaoyu_as_rain_material(test_config):
+    engine = DreamEngine(_dream_config(test_config))
+
+    cues = engine._recall_cues_from_dream_text("小雨站在门后，手指绕着一根发亮的线。")
+
+    assert any("门" in cue or "手指" in cue or "线" in cue for cue in cues)
+    assert "潮湿安静的夜里" not in cues
+
+
+def test_dream_recall_cues_do_not_require_preset_keywords_or_senses(test_config):
+    engine = DreamEngine(_dream_config(test_config))
+
+    cues = engine._recall_cues_from_dream_text("电梯把星期三吐回桌面。号码牌自己弯成问号。")
+
+    assert any("星期三" in cue for cue in cues)
+    assert any("号码牌" in cue for cue in cues)
 
 
 @pytest.mark.asyncio
