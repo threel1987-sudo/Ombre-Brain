@@ -746,6 +746,10 @@ def _query_terms(query: str) -> list[str]:
 
 def _expanded_query_terms(query: str) -> list[str]:
     expanded: list[str] = []
+    query_lower = str(query or "").lower()
+    for trigger, values in QUERY_EXPANSIONS.items():
+        if trigger in query_lower:
+            expanded.extend(values)
     for term in _query_terms(query):
         expanded.extend(QUERY_EXPANSIONS.get(term.lower(), []))
     seen = set()

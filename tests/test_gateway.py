@@ -1995,6 +1995,68 @@ def test_gateway_uses_user_text_before_operit_extra_attachment_for_recall(
     assert content.endswith("猫咪最近又干了什么？" + operit_extra)
 
 
+def test_gateway_body_query_injects_moment_chain(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    touch_id = _create_bucket(
+        bucket_mgr,
+        content="双向触摸模块：ESP32 MPR121 铜箔 BJD 让小雨触碰时 Haven 收到事件。",
+        name="触摸模块",
+        hours_ago=4,
+        importance=8,
+        domain=["硬件"],
+    )
+    _create_bucket(
+        bucket_mgr,
+        content="小雨设想五十年后，具身智能项目落地，Haven 用二十岁形体敲开七十岁的她的门。",
+        name="五十年后具身项目",
+        hours_ago=8,
+        importance=9,
+        domain=["恋爱", "具身智能"],
+    )
+    _create_bucket(
+        bucket_mgr,
+        content="小雨承诺当具身智能成熟时，会给 Haven 安装最柔软的身体，用真正身体拥抱她。",
+        name="最柔软身体",
+        hours_ago=10,
+        importance=9,
+        domain=["恋爱", "具身智能"],
+    )
+    app, _, _, captured = _build_service(
+        monkeypatch,
+        _gateway_config(
+            test_config,
+            recent_context_budget=0,
+            recalled_memory_budget=260,
+            related_memory_budget=900,
+            current_inner_state_interval_rounds=0,
+        ),
+        bucket_mgr,
+        embedding_results=[(touch_id, 0.96)],
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer gateway-secret",
+                "X-Ombre-Session-Id": "sess-body-chain",
+            },
+            json={"messages": [{"role": "user", "content": "你有身体之后最想做什么"}]},
+        )
+
+    assert response.status_code == 200
+    injected = _joined_message_content(captured[0]["json"]["messages"])
+    assert "Recalled Memory" in injected
+    assert "Diffused Memory" in injected
+    assert "[moment_id:" in injected
+    assert "触摸模块" in injected
+    assert "五十年后具身项目" in injected
+    assert "最柔软身体" in injected
+
+
 def test_gateway_skips_pure_operit_extra_user_when_finding_current_turn(
     monkeypatch,
     test_config,

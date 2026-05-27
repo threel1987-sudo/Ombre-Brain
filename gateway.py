@@ -31,6 +31,7 @@ from memory_diffusion import (
     seed_scores_for_buckets,
 )
 from memory_edges import MemoryEdgeStore
+from memory_moments import MemoryMomentStore
 from memory_nodes import MemoryNodeStore
 from persona_engine import PersonaStateEngine
 from utils import count_tokens_approx, load_config, setup_logging, strip_wikilinks
@@ -61,6 +62,36 @@ EXTERNAL_CONTEXT_BLOCK_TITLES = {
     "相关记忆",
     "屏幕文本",
 }
+MOMENT_SECTION_LABELS = {
+    "body": "body",
+    "moment": "moment",
+    "fact": "fact",
+    "original": "original",
+    "context": "context",
+    "feeling": "feeling",
+    "followup": "followup",
+    "affect_anchor": "affect_anchor",
+    "favorite_reason": "favorite_reason",
+    "comment": "year_ring",
+}
+MOMENT_TEMPERATURE_SECTIONS = {"affect_anchor", "favorite_reason", "comment"}
+BODY_CHAIN_QUERY_TERMS = {"身体", "具身", "具身智能", "具身项目", "形体"}
+BODY_CHAIN_PRIORITIES = (
+    ("embodied", ("具身智能", "具身项目", "具身", "形体")),
+    ("soft_body", ("柔软身体", "柔软的身体", "真实的拥抱", "拥抱")),
+    ("touch_interface", ("触摸模块", "触摸", "触碰", "mpr121", "esp32", "铜箔", "bjd", "electronic skin")),
+)
+INTIMATE_BODY_TERMS = {
+    "nsfw",
+    "dildo",
+    "睡奸",
+    "插入",
+    "进入她",
+    "操哭",
+    "湿润",
+    "发烫",
+    "小穴",
+}
 
 
 class GatewayService:
@@ -88,6 +119,7 @@ class GatewayService:
         self.embedding_engine = embedding_engine or EmbeddingEngine(config)
         self.memory_edge_store = MemoryEdgeStore(config)
         self.memory_node_store = memory_node_store or MemoryNodeStore(config)
+        self.memory_moment_store = MemoryMomentStore(config)
         self.state_store = state_store or GatewayStateStore(
             os.path.join(config["buckets_dir"], "gateway_state.db")
         )
@@ -464,7 +496,11 @@ class GatewayService:
         persona_block = ""
         core_memory = ""
         recent_context = ""
-        recalled_buckets: list[dict] = []
+        recalled_moments: list[dict] = []
+        moment_candidates: list[dict] = []
+        all_moments: list[dict] = []
+        grouped_moments: dict[str, list[dict]] = {}
+        moment_edges: list[dict] = []
         recalled_memory = ""
         relationship_weather = ""
         favorite_memory = ""
@@ -481,8 +517,19 @@ class GatewayService:
             if self._should_inject_interval(session_id, self.core_memory_interval_rounds):
                 core_memory = await self._build_core_memory_block(all_buckets)
             recent_context = await self._build_recent_context_block(all_buckets)
-            recalled_buckets = await self._select_dynamic_buckets(current_user_query, session_id, all_buckets)
-            recalled_memory = await self._summarize_buckets(recalled_buckets, self.recalled_budget)
+            if self.recalled_budget > 0 or self.related_memory_budget > 0:
+                all_moments, grouped_moments, moment_edges = self._refresh_moment_graph(all_buckets)
+                recalled_moments, moment_candidates = await self._select_dynamic_moments(
+                    current_user_query,
+                    session_id,
+                    all_buckets,
+                    grouped_moments,
+                )
+            recalled_memory = self._format_recalled_moments(
+                recalled_moments,
+                grouped_moments,
+                self.recalled_budget,
+            )
             if self._should_inject_interval(session_id, self.relationship_weather_interval_rounds):
                 relationship_weather = await self._build_relationship_weather_block(all_buckets)
             if (
@@ -491,13 +538,22 @@ class GatewayService:
                 or self._should_inject_interval(session_id, self.favorite_memory_interval_rounds)
             ):
                 favorite_memory, favorite_ids = await self._build_favorite_memory_block(all_buckets, session_id)
-            related_memory = await self._build_diffused_memory_block(
-                recalled_buckets,
-                all_buckets,
+            related_memory = self._build_moment_diffused_memory_block(
+                recalled_moments,
+                moment_candidates,
+                all_moments,
+                moment_edges,
                 current_user_query,
             )
             injected_ids = list(
-                dict.fromkeys([bucket["id"] for bucket in recalled_buckets] + favorite_ids)
+                dict.fromkeys(
+                    [
+                        str(moment.get("bucket_id") or "")
+                        for moment in recalled_moments
+                        if moment.get("bucket_id")
+                    ]
+                    + favorite_ids
+                )
             )
         else:
             logger.info(
@@ -1962,6 +2018,393 @@ class GatewayService:
                 "favorite reason",
             )
         )
+
+    def _refresh_moment_graph(
+        self,
+        all_buckets: list[dict],
+    ) -> tuple[list[dict], dict[str, list[dict]], list[dict]]:
+        self.memory_moment_store.bulk_upsert(all_buckets)
+        moments = self._recallable_moments(self.memory_moment_store.list_all())
+        grouped = self._moments_by_bucket(moments)
+        edges = self.memory_moment_store.list_edges()
+        edges.extend(self._bucket_edges_as_moment_edges(self.memory_edge_store.list_edges(), grouped))
+        return moments, grouped, edges
+
+    def _recallable_moments(self, moments: list[dict]) -> list[dict]:
+        return [
+            moment for moment in moments
+            if (moment.get("metadata", {}) or {}).get("bucket_type") != "feel"
+        ]
+
+    def _moments_by_bucket(self, moments: list[dict]) -> dict[str, list[dict]]:
+        grouped: dict[str, list[dict]] = {}
+        for moment in moments:
+            bucket_id = str(moment.get("bucket_id") or "")
+            if bucket_id:
+                grouped.setdefault(bucket_id, []).append(moment)
+        for items in grouped.values():
+            items.sort(key=lambda item: int(item.get("ordinal") or 0))
+        return grouped
+
+    def _representative_moment(self, moments: list[dict]) -> dict | None:
+        for section in ("original", "moment", "fact", "body", "context", "feeling", "followup", "comment"):
+            for moment in moments:
+                if moment.get("section") == section:
+                    return moment
+        return moments[0] if moments else None
+
+    def _representative_moments_by_bucket(self, moments: list[dict]) -> dict[str, dict]:
+        grouped = self._moments_by_bucket(moments)
+        representatives = {}
+        for bucket_id, bucket_moments in grouped.items():
+            representative = self._representative_moment(bucket_moments)
+            if representative:
+                representatives[bucket_id] = representative
+        return representatives
+
+    def _bucket_edges_as_moment_edges(
+        self,
+        bucket_edges: list[dict],
+        grouped: dict[str, list[dict]],
+    ) -> list[dict]:
+        edges = []
+        for edge in bucket_edges or []:
+            source_bucket = str(edge.get("source") or edge.get("source_memory_id") or "").strip()
+            target_bucket = str(edge.get("target") or edge.get("target_memory_id") or "").strip()
+            if not source_bucket or not target_bucket:
+                continue
+            target = self._representative_moment(grouped.get(target_bucket, []))
+            if not target:
+                continue
+            relation_type = str(edge.get("relation_type") or edge.get("type") or "relates_to")
+            try:
+                confidence = float(edge.get("confidence", 0.5))
+            except (TypeError, ValueError):
+                confidence = 0.5
+            for source in grouped.get(source_bucket, []):
+                if source.get("section") in MOMENT_TEMPERATURE_SECTIONS:
+                    continue
+                edges.append(
+                    {
+                        "source": source["moment_id"],
+                        "target": target["moment_id"],
+                        "bucket_id": source_bucket,
+                        "relation_type": relation_type,
+                        "confidence": max(0.0, min(1.0, confidence)),
+                        "reason": edge.get("reason") or "bucket edge bridge",
+                    }
+                )
+        return edges
+
+    async def _select_dynamic_moments(
+        self,
+        query: str,
+        session_id: str,
+        all_buckets: list[dict],
+        grouped_moments: dict[str, list[dict]],
+    ) -> tuple[list[dict], list[dict]]:
+        if not query or self.inject_max_cards <= 0:
+            return [], []
+
+        eligible_ids = {
+            bucket["id"]
+            for bucket in all_buckets
+            if bucket.get("id") and self._is_dynamic_candidate(bucket)
+        }
+        if not eligible_ids:
+            return [], []
+
+        selected_buckets = await self._select_dynamic_buckets(query, session_id, all_buckets)
+        selected_bucket_ids = [bucket["id"] for bucket in selected_buckets if bucket.get("id")]
+        bucket_boosts = {bucket_id: 1.0 for bucket_id in selected_bucket_ids}
+        candidates = self.memory_moment_store.search_moments(
+            query,
+            limit=max(20, self.dynamic_top_k * 2, self.inject_max_cards * 8),
+            bucket_boosts=bucket_boosts,
+        )
+        candidates = [
+            moment for moment in candidates
+            if str(moment.get("bucket_id") or "") in eligible_ids
+            and moment.get("section") not in MOMENT_TEMPERATURE_SECTIONS
+        ]
+
+        selected: list[dict] = []
+        seen_buckets: set[str] = set()
+        for bucket_id in selected_bucket_ids:
+            moment = next(
+                (
+                    candidate for candidate in candidates
+                    if str(candidate.get("bucket_id") or "") == bucket_id
+                ),
+                None,
+            )
+            if not moment:
+                moment = self._representative_moment(grouped_moments.get(bucket_id, []))
+            if moment and bucket_id not in seen_buckets:
+                selected.append(moment)
+                seen_buckets.add(bucket_id)
+
+        if selected:
+            return selected[: self.inject_max_cards], candidates
+
+        recent_ids = self.state_store.get_recent_bucket_ids(session_id, self.skip_recent_rounds)
+        active_candidates = [
+            moment for moment in candidates
+            if str(moment.get("bucket_id") or "") not in recent_ids
+        ] or candidates
+        for moment in active_candidates:
+            bucket_id = str(moment.get("bucket_id") or "")
+            if not bucket_id or bucket_id in seen_buckets:
+                continue
+            selected.append(moment)
+            seen_buckets.add(bucket_id)
+            if len(selected) >= self.inject_max_cards:
+                break
+        return selected, candidates
+
+    def _format_recalled_moments(
+        self,
+        moments: list[dict],
+        grouped_moments: dict[str, list[dict]],
+        budget: int,
+    ) -> str:
+        if budget <= 0 or not moments:
+            return ""
+        remaining = budget
+        parts = []
+        for moment in moments:
+            block = self._format_direct_moment(moment, grouped_moments)
+            tokens = count_tokens_approx(block)
+            if tokens <= 0:
+                continue
+            if tokens > remaining and parts:
+                break
+            if tokens > remaining:
+                block = self._trim_text(block, remaining)
+                tokens = count_tokens_approx(block)
+            if tokens <= 0:
+                continue
+            parts.append(block)
+            remaining -= tokens
+            if remaining <= 0:
+                break
+        return "\n".join(parts)
+
+    def _format_direct_moment(self, moment: dict, grouped_moments: dict[str, list[dict]]) -> str:
+        line = self._format_moment_line(moment, max_chars=260, note="")
+        contexts = [
+            item for item in self._context_moments_for_seed(moment, grouped_moments)
+            if item.get("section") in MOMENT_TEMPERATURE_SECTIONS
+        ][:2]
+        if not contexts:
+            return line
+        context_lines = [
+            self._format_moment_line(context, max_chars=120, note="")
+            for context in contexts
+        ]
+        return line + "\n  context: " + " | ".join(context_lines)
+
+    def _context_moments_for_seed(self, seed: dict, grouped: dict[str, list[dict]]) -> list[dict]:
+        bucket_id = str(seed.get("bucket_id") or "")
+        seed_id = seed.get("moment_id")
+        bucket_moments = grouped.get(bucket_id, [])
+        contexts = []
+        seed_ordinal = int(seed.get("ordinal") or 0)
+        for moment in bucket_moments:
+            if moment.get("moment_id") == seed_id:
+                continue
+            section = moment.get("section")
+            ordinal = int(moment.get("ordinal") or 0)
+            if abs(ordinal - seed_ordinal) == 1 and section not in MOMENT_TEMPERATURE_SECTIONS:
+                contexts.append(moment)
+        for section in ("affect_anchor", "favorite_reason", "comment"):
+            for moment in bucket_moments:
+                if moment.get("moment_id") != seed_id and moment.get("section") == section:
+                    contexts.append(moment)
+                    break
+        return contexts[:4]
+
+    def _build_moment_diffused_memory_block(
+        self,
+        seed_moments: list[dict],
+        moment_candidates: list[dict],
+        moments: list[dict],
+        edges: list[dict],
+        query_text: str = "",
+    ) -> str:
+        if self.related_memory_budget <= 0 or not seed_moments:
+            return ""
+
+        remaining = self.related_memory_budget
+        parts = []
+        used_bucket_ids = {
+            str(moment.get("bucket_id") or "")
+            for moment in seed_moments
+            if moment.get("bucket_id")
+        }
+
+        for moment in self._secondary_direct_moments(query_text, moment_candidates, used_bucket_ids):
+            block = self._format_moment_line(
+                moment,
+                max_chars=180,
+                note="related_query_hit",
+            )
+            tokens = count_tokens_approx(block)
+            if tokens > remaining and parts:
+                break
+            if tokens > remaining:
+                block = self._trim_text(block, remaining)
+                tokens = count_tokens_approx(block)
+            if tokens <= 0:
+                continue
+            parts.append(block)
+            remaining -= tokens
+            used_bucket_ids.add(str(moment.get("bucket_id") or ""))
+            if remaining <= 0:
+                break
+
+        if remaining <= 0 or not self.diffusion_options.enabled or self.diffusion_options.top_k <= 0:
+            return "\n".join(parts)
+
+        filtered_edges = [
+            edge for edge in edges
+            if float(edge.get("confidence", 0.0)) >= self.edge_min_confidence
+        ]
+        moment_map = self._moment_diffusion_map(moments)
+        representatives = self._representative_moments_by_bucket(moments)
+        hits = diffuse_memory(
+            self._seed_scores_for_moments(seed_moments),
+            filtered_edges,
+            moment_map,
+            options=self.diffusion_options,
+            exclude_ids={moment["moment_id"] for moment in seed_moments if moment.get("moment_id")},
+        )
+        seen_moment_ids: set[str] = set()
+        for hit in hits:
+            moment = moment_map.get(hit.bucket_id)
+            if not moment or hit.bucket_id in seen_moment_ids:
+                continue
+            bucket_id = str(moment.get("bucket_id") or "")
+            if bucket_id in used_bucket_ids:
+                continue
+            if moment.get("section") in MOMENT_TEMPERATURE_SECTIONS:
+                replacement = representatives.get(bucket_id)
+                if replacement:
+                    moment = replacement
+                    if moment.get("moment_id") in seen_moment_ids:
+                        continue
+            note = "conflict_or_blocking_path" if path_has_caution(hit.best_path) else "background_association_not_current_fact"
+            block = self._format_moment_line(moment, max_chars=180, note=note)
+            tokens = count_tokens_approx(block)
+            if tokens > remaining and parts:
+                break
+            if tokens > remaining:
+                block = self._trim_text(block, remaining)
+                tokens = count_tokens_approx(block)
+            if tokens <= 0:
+                continue
+            parts.append(block)
+            remaining -= tokens
+            used_bucket_ids.add(bucket_id)
+            seen_moment_ids.add(str(moment.get("moment_id") or hit.bucket_id))
+            if remaining <= 0:
+                break
+        return "\n".join(parts)
+
+    def _secondary_direct_moments(
+        self,
+        query: str,
+        candidates: list[dict],
+        used_bucket_ids: set[str],
+    ) -> list[dict]:
+        hidden = []
+        seen = set(used_bucket_ids)
+        for moment in candidates:
+            bucket_id = str(moment.get("bucket_id") or "")
+            if not bucket_id or bucket_id in seen:
+                continue
+            if moment.get("section") in MOMENT_TEMPERATURE_SECTIONS:
+                continue
+            hidden.append(moment)
+            seen.add(bucket_id)
+        if self._query_wants_body_chain(query):
+            hidden.sort(key=self._body_chain_rank)
+            return hidden[:5]
+        return hidden[: max(0, min(2, self.inject_max_cards))]
+
+    def _moment_diffusion_map(self, moments: list[dict]) -> dict[str, dict]:
+        mapped = {}
+        for moment in moments:
+            moment_id = moment.get("moment_id")
+            if not moment_id:
+                continue
+            item = dict(moment)
+            meta = dict(item.get("metadata", {}) or {})
+            meta["importance"] = meta.get("bucket_importance", 5)
+            meta["type"] = meta.get("bucket_type", "")
+            meta["anchor"] = meta.get("bucket_anchor", False)
+            meta["pinned"] = meta.get("bucket_pinned", False)
+            meta["protected"] = meta.get("bucket_protected", False)
+            meta["name"] = meta.get("bucket_name", "")
+            item["metadata"] = meta
+            mapped[str(moment_id)] = item
+        return mapped
+
+    def _seed_scores_for_moments(self, moments: list[dict]) -> dict[str, float]:
+        scores = {}
+        for moment in moments:
+            moment_id = str(moment.get("moment_id") or "")
+            if not moment_id:
+                continue
+            try:
+                score = float(moment.get("score", 0.75))
+            except (TypeError, ValueError):
+                score = 0.75
+            scores[moment_id] = max(0.15, min(1.0, score))
+        return scores
+
+    def _format_moment_line(self, moment: dict, *, max_chars: int, note: str) -> str:
+        label = MOMENT_SECTION_LABELS.get(str(moment.get("section") or ""), str(moment.get("section") or "moment"))
+        title = self._moment_bucket_title(moment)
+        title_part = f" {title}" if title else ""
+        suffix = f" ({note})" if note else ""
+        return (
+            f"- [bucket_id:{moment['bucket_id']}] [moment_id:{moment['moment_id']}] "
+            f"{label}{title_part}: {self._moment_text(moment, max_chars)}{suffix}"
+        )
+
+    def _moment_text(self, moment: dict, max_chars: int = 220) -> str:
+        return self._clip_text(" ".join(str(moment.get("text") or "").split()), max_chars)
+
+    def _moment_bucket_title(self, moment: dict) -> str:
+        meta = moment.get("metadata", {}) if isinstance(moment.get("metadata"), dict) else {}
+        title = str(meta.get("bucket_name") or "").strip()
+        bucket_id = str(moment.get("bucket_id") or "")
+        return "" if title == bucket_id else title
+
+    def _moment_search_fields(self, moment: dict) -> str:
+        meta = moment.get("metadata", {}) if isinstance(moment.get("metadata"), dict) else {}
+        return " ".join(
+            [
+                str(moment.get("text") or ""),
+                str(meta.get("bucket_name") or ""),
+                " ".join(str(item) for item in meta.get("bucket_tags", []) or []),
+                " ".join(str(item) for item in meta.get("bucket_domain", []) or []),
+            ]
+        ).lower()
+
+    def _query_wants_body_chain(self, query: str) -> bool:
+        text = str(query or "").lower()
+        return any(term in text for term in BODY_CHAIN_QUERY_TERMS)
+
+    def _body_chain_rank(self, moment: dict) -> tuple[int, float]:
+        fields = self._moment_search_fields(moment)
+        for index, (_, terms) in enumerate(BODY_CHAIN_PRIORITIES):
+            if any(term.lower() in fields for term in terms):
+                return index, -float(moment.get("score") or 0.0)
+        if any(term in fields for term in INTIMATE_BODY_TERMS):
+            return len(BODY_CHAIN_PRIORITIES) + 1, -float(moment.get("score") or 0.0)
+        return 99, -float(moment.get("score") or 0.0)
 
     async def _build_diffused_memory_block(
         self,
