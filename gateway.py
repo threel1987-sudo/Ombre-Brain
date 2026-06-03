@@ -28,6 +28,7 @@ from memory_diffusion import (
     diffuse_memory,
     diffusion_options_from_config,
     path_has_caution,
+    path_has_old_version,
     seed_scores_for_buckets,
     should_suppress_context_candidate,
 )
@@ -3150,7 +3151,11 @@ class GatewayService:
         return None
 
     def _diffusion_path_is_caution_or_old(self, path: Any, moment_map: dict[str, dict]) -> bool:
-        return path_has_caution(path) or self._diffusion_path_has_old_moment(path, moment_map)
+        return (
+            path_has_caution(path)
+            or path_has_old_version(path)
+            or self._diffusion_path_has_old_moment(path, moment_map)
+        )
 
     def _diffusion_path_has_old_moment(self, path: Any, moment_map: dict[str, dict]) -> bool:
         return any(
@@ -3187,7 +3192,7 @@ class GatewayService:
     def _diffused_path_note(self, path: Any, moment_map: dict[str, dict]) -> str:
         if path_has_caution(path):
             return "conflict_or_blocking_path"
-        if self._diffusion_path_has_old_moment(path, moment_map):
+        if path_has_old_version(path) or self._diffusion_path_has_old_moment(path, moment_map):
             return "old_or_resolved_path"
         return "background_association_not_current_fact"
 

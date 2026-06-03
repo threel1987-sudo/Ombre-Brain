@@ -6,6 +6,8 @@ from memory_diffusion import (
     diffusion_options_from_config,
     format_diffusion_path,
     format_diffusion_trace,
+    path_has_caution,
+    path_has_old_version,
 )
 
 
@@ -202,6 +204,15 @@ def test_diffusion_config_parses_chain_walk_options():
     assert options.chain_continue_relation_types == ("context_of", "evidenced_by")
 
 
+def test_diffusion_config_includes_typed_relation_defaults():
+    options = diffusion_options_from_config({})
+
+    assert options.relation_type_weights["embodiment_chain"] > options.relation_type_weights["supports"]
+    assert options.relation_type_weights["same_topic"] > options.relation_type_weights["relates_to"]
+    assert options.relation_type_weights["old_version"] < options.relation_type_weights["supports"]
+    assert options.relation_type_weights["conflict"] < options.relation_type_weights["supports"]
+
+
 def test_diffusion_accumulates_multiple_paths_to_same_node():
     bucket_map = {bucket_id: _bucket(bucket_id) for bucket_id in ["A", "B", "C", "D"]}
     edges = [
@@ -321,6 +332,61 @@ def test_diffusion_can_follow_incoming_edges():
 
     assert hits[0].bucket_id == "B"
     assert format_diffusion_path(hits[0].best_path, bucket_map) == "seed memory <- incoming memory"
+
+
+def test_old_version_relation_is_demoted_unless_query_requests_old_context():
+    bucket_map = {
+        "A": _bucket("A", name="入口"),
+        "current": _bucket("current", name="当前方案"),
+        "old": _bucket("old", name="旧版方案"),
+    }
+    bucket_map["old"]["content"] = "旧版触摸方案已经废弃，只在问旧链路时作为背景。"
+    edges = [
+        {"source": "A", "target": "current", "relation_type": "supports", "confidence": 0.6},
+        {"source": "A", "target": "old", "relation_type": "old_version", "confidence": 1.0},
+    ]
+
+    default_hits = diffuse_memory(
+        {"A": 1.0},
+        edges,
+        bucket_map,
+        options=DiffusionOptions(max_hops=1, top_k=10, min_activation=0.0),
+    )
+    old_query_hits = diffuse_memory(
+        {"A": 1.0},
+        edges,
+        bucket_map,
+        options=DiffusionOptions(max_hops=1, top_k=10, min_activation=0.0),
+        query_text="旧版触摸方案",
+    )
+
+    assert default_hits[0].bucket_id == "current"
+    assert path_has_old_version(next(hit for hit in default_hits if hit.bucket_id == "old").best_path)
+    assert old_query_hits[0].bucket_id == "old"
+
+
+def test_conflict_relation_marks_caution_and_stops_chain_walk():
+    bucket_map = {bucket_id: _bucket(bucket_id) for bucket_id in ["A", "conflict", "followup"]}
+    edges = [
+        {"source": "A", "target": "conflict", "relation_type": "conflict", "confidence": 1.0},
+        {"source": "conflict", "target": "followup", "relation_type": "context_of", "confidence": 1.0},
+    ]
+
+    hits = diffuse_memory(
+        {"A": 1.0},
+        edges,
+        bucket_map,
+        options=DiffusionOptions(
+            max_hops=1,
+            top_k=10,
+            min_activation=0.0,
+            chain_walk_enabled=True,
+            chain_max_hops=4,
+        ),
+    )
+
+    assert [hit.bucket_id for hit in hits] == ["conflict"]
+    assert path_has_caution(hits[0].best_path)
 
 
 def test_body_query_prefers_embodiment_chain_and_suppresses_intimacy_and_old_context():

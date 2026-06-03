@@ -11,6 +11,7 @@ def _moment(
     bucket_id: str,
     text: str,
     *,
+    section: str = "body",
     tags: list[str] | None = None,
     domain: list[str] | None = None,
     facets: dict[str, float] | None = None,
@@ -18,7 +19,7 @@ def _moment(
     return {
         "moment_id": f"{bucket_id}:m1",
         "bucket_id": bucket_id,
-        "section": "body",
+        "section": section,
         "text": text,
         "metadata": {
             "bucket_name": bucket_id,
@@ -93,6 +94,64 @@ def test_build_cross_bucket_edges_ignores_weak_metadata_only_overlap():
     )
 
     assert edges == []
+
+
+def test_build_cross_bucket_edges_assigns_typed_relations():
+    moments = [
+        _moment(
+            "body-a",
+            "具身智能项目里 ESP32 body-entry 触摸模块开始接入身体入口。",
+            tags=["esp32", "触摸模块"],
+            domain=["硬件"],
+            facets={"embodiment": 0.8, "hardware_protocol": 0.8},
+        ),
+        _moment(
+            "body-b",
+            "ESP32 body-entry 触摸模块后续接入电子皮肤。",
+            tags=["esp32", "触摸模块"],
+            domain=["硬件"],
+            facets={"embodiment": 0.7, "hardware_protocol": 0.8},
+        ),
+        _moment(
+            "followup",
+            "ESP32 body-entry 触摸模块后续还要校准。",
+            section="followup",
+            tags=["触摸模块"],
+            domain=["硬件"],
+            facets={"hardware_protocol": 0.7},
+        ),
+        _moment(
+            "old",
+            "旧版 ESP32 body-entry 触摸模块方案已经废弃。",
+            tags=["触摸模块"],
+            domain=["硬件"],
+            facets={"old_or_resolved": 0.9},
+        ),
+        _moment(
+            "topic-a",
+            "浏览记录 四个身份 关系称呼。",
+            tags=["identity"],
+            domain=["恋爱"],
+        ),
+        _moment(
+            "topic-b",
+            "四个身份 关系称呼 后续整理。",
+            tags=["identity"],
+            domain=["恋爱"],
+        ),
+    ]
+
+    edges = build_moment_graph.build_cross_bucket_edges(
+        moments,
+        min_score=0.58,
+        max_edges_per_moment=5,
+    )
+    relation_by_pair = {(edge["source"], edge["target"]): edge["relation_type"] for edge in edges}
+
+    assert relation_by_pair[("body-a:m1", "body-b:m1")] in {"same_event", "embodiment_chain"}
+    assert relation_by_pair[("body-a:m1", "followup:m1")] == "followup"
+    assert relation_by_pair[("body-a:m1", "old:m1")] == "old_version"
+    assert relation_by_pair[("topic-a:m1", "topic-b:m1")] == "same_topic"
 
 
 def test_terms_and_metadata_filters_drop_worker_noise():

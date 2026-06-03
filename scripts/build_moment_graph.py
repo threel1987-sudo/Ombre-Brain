@@ -75,6 +75,42 @@ CONTEXT_GLUE_TERMS = {
     "向我",
     "给我",
 }
+EMBODIMENT_FACETS = {"embodiment", "hardware_protocol"}
+EMOTIONAL_FACETS = {"relationship_identity", "intimacy"}
+TEMPERATURE_SECTIONS = {"feeling", "reflection", "affect_anchor", "favorite_reason", "comment"}
+CONFLICT_MARKERS = (
+    "conflict",
+    "fight",
+    "argument",
+    "blocked",
+    "冲突",
+    "吵架",
+    "争吵",
+    "矛盾",
+    "误会",
+    "阻断",
+)
+OLD_VERSION_MARKERS = (
+    "old version",
+    "old path",
+    "legacy",
+    "deprecated",
+    "obsolete",
+    "superseded",
+    "resolved",
+    "旧版",
+    "旧方案",
+    "旧链",
+    "旧路径",
+    "已解决",
+    "已合并",
+    "已经合并",
+    "已废弃",
+    "废弃",
+    "过时",
+    "不再使用",
+    "不应该继续",
+)
 
 
 @dataclass(frozen=True)
@@ -343,11 +379,58 @@ def pair_score(source: IndexedMoment, target: IndexedMoment) -> tuple[float, lis
 
 def relation_type_for(score: float, source: IndexedMoment, target: IndexedMoment) -> str:
     term_overlap = source.terms & target.terms
-    if score >= 0.82 and source.facets & target.facets and len(term_overlap) >= 2:
+    facet_overlap = source.facets & target.facets
+    if moment_has_marker(source.moment, CONFLICT_MARKERS) or moment_has_marker(target.moment, CONFLICT_MARKERS):
+        return "conflict"
+    if moment_has_old_version_marker(source.moment) or moment_has_old_version_marker(target.moment):
+        return "old_version"
+    if source.moment.get("section") == "followup" or target.moment.get("section") == "followup":
+        return "followup"
+    if score >= 0.82 and facet_overlap and len(term_overlap) >= 2:
         return "same_event"
-    if source.facets & target.facets:
+    if facet_overlap & EMBODIMENT_FACETS:
+        return "embodiment_chain"
+    if (
+        facet_overlap & EMOTIONAL_FACETS
+        and (
+            str(source.moment.get("section") or "") in TEMPERATURE_SECTIONS
+            or str(target.moment.get("section") or "") in TEMPERATURE_SECTIONS
+        )
+    ):
+        return "emotional_echo"
+    if facet_overlap:
         return "context_of"
+    if len(term_overlap) >= 2 or score >= 0.72:
+        return "same_topic"
     return "supports"
+
+
+def moment_has_old_version_marker(moment: dict[str, Any]) -> bool:
+    meta = moment.get("metadata", {}) if isinstance(moment.get("metadata"), dict) else {}
+    raw_facets = meta.get("annotation_facets")
+    if isinstance(raw_facets, dict):
+        try:
+            if float(raw_facets.get("old_or_resolved", 0.0)) >= 0.35:
+                return True
+        except (TypeError, ValueError):
+            pass
+    if meta.get("resolved") or meta.get("digested") or meta.get("bucket_resolved") or meta.get("bucket_digested"):
+        return True
+    return moment_has_marker(moment, OLD_VERSION_MARKERS)
+
+
+def moment_has_marker(moment: dict[str, Any], markers: tuple[str, ...]) -> bool:
+    meta = moment.get("metadata", {}) if isinstance(moment.get("metadata"), dict) else {}
+    haystack = " ".join(
+        [
+            str(moment.get("text") or ""),
+            str(meta.get("annotation_summary") or ""),
+            str(meta.get("bucket_name") or ""),
+            " ".join(str(item) for item in meta.get("bucket_tags", []) or []),
+            " ".join(str(item) for item in meta.get("bucket_domain", []) or []),
+        ]
+    ).lower()
+    return any(marker.lower() in haystack for marker in markers)
 
 
 def moment_terms(moment: dict[str, Any], options: MemoryRelevanceOptions) -> set[str]:

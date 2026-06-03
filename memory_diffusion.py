@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from memory_relevance import (
+    active_facets,
+    facets_for_text,
     MemoryRelevanceOptions,
     memory_relevance_options_from_config,
     relevance_multiplier,
@@ -15,20 +17,28 @@ DEFAULT_HOP_DECAYS = (0.8, 0.6, 0.4, 0.25)
 DEFAULT_CHAIN_CONTINUE_RELATIONS = (
     "same_event",
     "context_of",
+    "embodiment_chain",
     "precedes",
     "previous_context",
     "next_context",
+    "followup",
     "updates",
     "evidenced_by",
     "reflects_on",
 )
 SAFE_INCOMING_CHAIN_RELATIONS = frozenset({"same_event"})
+CAUTION_RELATION_TYPES = frozenset({"contradicts", "blocks", "conflict"})
+OLD_VERSION_RELATION_TYPES = frozenset({"old_version"})
 DEFAULT_RELATION_TYPE_WEIGHTS = {
     "same_event": 1.15,
     "context_of": 1.1,
+    "embodiment_chain": 1.05,
+    "same_topic": 0.9,
     "precedes": 1.0,
     "triggers": 1.0,
+    "cause": 0.95,
     "causes": 0.95,
+    "followup": 0.9,
     "updates": 0.9,
     "supports": 0.85,
     "promises": 0.9,
@@ -39,26 +49,34 @@ DEFAULT_RELATION_TYPE_WEIGHTS = {
     "reflects_on": 0.8,
     "evidenced_by": 1.0,
     "relates_to": 0.7,
+    "old_version": 0.35,
+    "conflict": 0.4,
     "contradicts": 0.45,
     "blocks": 0.45,
 }
 
 RELATION_DISPLAY_PRIORITY = {
     "same_event": 90,
+    "embodiment_chain": 82,
     "context_of": 80,
     "precedes": 80,
     "previous_context": 75,
     "next_context": 70,
+    "followup": 68,
     "updates": 65,
     "reflects_on": 64,
     "evidenced_by": 62,
     "triggers": 60,
+    "cause": 58,
     "causes": 58,
+    "same_topic": 55,
     "supports": 50,
     "promises": 45,
     "belongs_to": 40,
     "emotional_echo": 35,
     "relates_to": 20,
+    "old_version": 8,
+    "conflict": 5,
     "contradicts": 5,
     "blocks": 5,
 }
@@ -140,10 +158,28 @@ def _path_rank_key(path: "DiffusionPath") -> tuple[int, float, int]:
     return (_path_display_priority(path), path.score, -len(path.steps))
 
 
-def _hit_rank_key(hit: "DiffusionHit", options: DiffusionOptions) -> tuple[int, float | int, float]:
+def _hit_rank_key(
+    hit: "DiffusionHit",
+    options: DiffusionOptions,
+    query_text: str = "",
+) -> tuple[int, int, float | int, float]:
+    if _query_requests_old_or_conflict(query_text, options):
+        requested_path = path_has_old_version(hit.best_path) or path_has_caution(hit.best_path)
+        return (
+            1 if requested_path else 0,
+            _path_display_priority(hit.best_path),
+            hit.activation,
+            -len(hit.best_path.steps),
+        )
     if options.chain_walk_enabled:
-        return (_path_display_priority(hit.best_path), hit.activation, -len(hit.best_path.steps))
+        return (
+            0,
+            _path_display_priority(hit.best_path),
+            hit.activation,
+            -len(hit.best_path.steps),
+        )
     return (
+        0,
         _path_display_priority(hit.best_path),
         hit.activation,
         -len(hit.best_path.steps),
@@ -276,10 +312,7 @@ def diffuse_memory(
                 if query_multiplier <= 0:
                     continue
 
-                relation_weight = options.relation_type_weights.get(
-                    step.relation_type,
-                    options.relation_type_weights.get("relates_to", 0.7),
-                )
+                relation_weight = _relation_weight(step.relation_type, query_text, options)
                 next_strength = state.path_strength * step.confidence * relation_weight * query_multiplier
                 activation = (
                     next_strength
@@ -333,7 +366,7 @@ def diffuse_memory(
                 )
             )
 
-    hits.sort(key=lambda item: _hit_rank_key(item, options), reverse=True)
+    hits.sort(key=lambda item: _hit_rank_key(item, options, query_text), reverse=True)
     return hits[: options.top_k]
 
 
@@ -357,7 +390,7 @@ def _should_continue_path(
     relation_type = str(step.relation_type or "relates_to")
     if step.direction == "incoming" and relation_type not in SAFE_INCOMING_CHAIN_RELATIONS:
         return False
-    if relation_type in {"contradicts", "blocks"}:
+    if relation_type in CAUTION_RELATION_TYPES or relation_type in OLD_VERSION_RELATION_TYPES:
         return False
     if relation_type in set(options.chain_continue_relation_types):
         return True
@@ -409,7 +442,11 @@ def format_diffusion_trace(
 
 
 def path_has_caution(path: DiffusionPath) -> bool:
-    return any(step.relation_type in {"contradicts", "blocks"} for step in path.steps)
+    return any(step.relation_type in CAUTION_RELATION_TYPES for step in path.steps)
+
+
+def path_has_old_version(path: DiffusionPath) -> bool:
+    return any(step.relation_type in OLD_VERSION_RELATION_TYPES for step in path.steps)
 
 
 def should_suppress_context_candidate(
@@ -444,6 +481,23 @@ def _build_adjacency(edges: list[dict], include_incoming: bool) -> dict[str, lis
     for steps in adjacency.values():
         steps.sort(key=lambda item: item.confidence, reverse=True)
     return adjacency
+
+
+def _relation_weight(relation_type: str, query_text: str, options: DiffusionOptions) -> float:
+    relation_type = str(relation_type or "relates_to")
+    base = options.relation_type_weights.get(
+        relation_type,
+        options.relation_type_weights.get("relates_to", 0.7),
+    )
+    if relation_type in CAUTION_RELATION_TYPES or relation_type in OLD_VERSION_RELATION_TYPES:
+        if _query_requests_old_or_conflict(query_text, options):
+            return max(base, 0.85 if relation_type in OLD_VERSION_RELATION_TYPES else 0.75)
+    return base
+
+
+def _query_requests_old_or_conflict(query_text: str, options: DiffusionOptions) -> bool:
+    query_facets = active_facets(facets_for_text(query_text, options.relevance))
+    return "old_or_resolved" in query_facets
 
 
 def _seed_score(bucket: dict) -> float:

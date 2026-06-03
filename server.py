@@ -75,6 +75,7 @@ from memory_diffusion import (
     format_diffusion_path,
     format_diffusion_trace,
     path_has_caution,
+    path_has_old_version,
     seed_scores_for_buckets,
     should_suppress_context_candidate,
 )
@@ -2111,7 +2112,12 @@ def _format_related_moment(
     path=None,
     moment_map: dict[str, dict] | None = None,
 ) -> str:
-    note = "路径含冲突/阻断，仅作边界背景。" if caution else "背景联想，不代表当前事实。"
+    if caution:
+        note = "路径含冲突/阻断，仅作边界背景。"
+    elif path is not None and path_has_old_version(path):
+        note = "旧路径/旧版本背景，不代表当前事实。"
+    else:
+        note = "背景联想，不代表当前事实。"
     moment_map = moment_map or {}
     summary = _diffused_moment_summary(moment, path=path, moment_map=moment_map)
     context = _diffused_temperature_context(moment, path=path, moment_map=moment_map)
