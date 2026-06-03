@@ -93,10 +93,12 @@ from memory_relevance import (
 )
 from memory_layers import (
     CONTEXT_ONLY_SECTIONS,
+    bucket_layer_debug,
     can_bucket_be_related_target,
     can_moment_be_direct_seed,
     can_moment_be_recall_context,
     can_moment_be_related_target,
+    moment_layer_debug,
     normalize_write_classification,
 )
 from recall_policy import RecallPolicy
@@ -2863,6 +2865,10 @@ def _inspect_bucket_label(bucket: dict | None, bucket_id: str) -> str:
     return str(meta.get("name") or bucket.get("name") or bucket_id)
 
 
+def _inspect_bucket_layer_payload(bucket: dict | None, *, explicit_lookup: bool = False) -> dict:
+    return bucket_layer_debug(bucket, explicit_lookup=explicit_lookup)
+
+
 def _inspect_path_payload(path, bucket_map: dict[str, dict]) -> dict:
     return {
         "score": round(float(path.score), 4),
@@ -2980,6 +2986,7 @@ async def inspect_diffusion(
             return {"salience": None, "resonance": None, "facets": {}, "error": str(e)}
 
     seed_payload = []
+    explicit_lookup = _query_explicitly_requests_archive_memory(query)
     for bucket in seed_buckets:
         bucket_id = bucket.get("id", "")
         values = node_values(bucket_id, bucket)
@@ -2989,6 +2996,7 @@ async def inspect_diffusion(
                 "name": _inspect_bucket_label(bucket, bucket_id),
                 "source": bucket.get("_inspect_source", "keyword"),
                 "seed_score": round(float(seed_scores.get(bucket_id, 0.0)), 4),
+                "layer_debug": _inspect_bucket_layer_payload(bucket, explicit_lookup=explicit_lookup),
                 **values,
             }
         )
@@ -3002,6 +3010,7 @@ async def inspect_diffusion(
                 "bucket_id": hit.bucket_id,
                 "name": _inspect_bucket_label(bucket, hit.bucket_id),
                 "score": hit.activation,
+                "layer_debug": _inspect_bucket_layer_payload(bucket, explicit_lookup=explicit_lookup),
                 **values,
                 "path": format_diffusion_trace(hit.best_path, bucket_map, use_labels=True),
                 "path_ids": list(hit.best_path.nodes),
@@ -3039,6 +3048,7 @@ def _inspect_moment_payload(moment: dict, *, include_text: bool) -> dict:
         "source_id": moment.get("source_id"),
         "text_hash": moment.get("text_hash"),
         "text_length": len(text),
+        "layer_debug": moment_layer_debug(moment),
         "metadata": moment.get("metadata", {}),
         "created_at": moment.get("created_at"),
         "updated_at": moment.get("updated_at"),
@@ -3070,6 +3080,7 @@ async def inspect_moments(bucket_id: str = "", limit: int = 20) -> dict:
             "mode": "bucket",
             "bucket_id": bucket_id,
             "name": str(meta.get("name") or bucket.get("name") or bucket_id),
+            "bucket_layer_debug": _inspect_bucket_layer_payload(bucket),
             "count": len(moments),
             "edge_count": len(edges),
             "db_path": memory_moment_store.db_path,
@@ -5268,6 +5279,7 @@ async def api_breath_debug(request):
                     "resolved": resolved,
                     "pinned": meta.get("pinned", False),
                     "anchor": meta.get("anchor", False),
+                    "layer_debug": _inspect_bucket_layer_payload(bucket),
                     "scores": {
                         "topic": round(topic, 4),
                         "emotion": round(emotion, 4),

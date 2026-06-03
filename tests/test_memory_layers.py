@@ -16,6 +16,7 @@ from memory_layers import (
     RENDER_DIRECT_AUTO,
     RENDER_FAVORITE,
     RENDER_WEATHER,
+    bucket_layer_debug,
     can_bucket_be_recent_context,
     can_bucket_be_related_target,
     can_bucket_diffuse,
@@ -25,6 +26,7 @@ from memory_layers import (
     infer_bucket_layer,
     infer_moment_layer,
     is_context_only_section,
+    moment_layer_debug,
     normalize_write_classification,
     policy_for_bucket,
     policy_for_moment,
@@ -85,6 +87,12 @@ def test_writer_classification_maps_stable_and_relationship_to_anchor_policy():
     assert can_bucket_be_recent_context(state) is True
     assert can_bucket_be_recent_context(event) is True
     assert can_bucket_be_recent_context(stable, explicit_lookup=True) is True
+
+    stable_debug = bucket_layer_debug(stable)
+    assert stable_debug["layer"] == LAYER_ANCHOR
+    assert stable_debug["can_recent_context"] is False
+    assert stable_debug["writer"]["memory_layer"] == "stable_boundary"
+    assert stable_debug["writer"]["runtime_layer_hint"] == LAYER_ANCHOR
 
 
 def test_manual_favorite_and_core_signals_override_writer_classification():
@@ -161,9 +169,19 @@ def test_moment_layer_uses_bucket_writer_classification_metadata():
 
     assert infer_moment_layer(body) == LAYER_ANCHOR
     assert can_moment_be_direct_seed(body) is True
+    body_debug = moment_layer_debug(body)
+    assert body_debug["layer"] == LAYER_ANCHOR
+    assert body_debug["parent_layer"] == LAYER_ANCHOR
+    assert body_debug["can_direct_seed"] is True
+    assert body_debug["writer"]["memory_layer"] == "relationship_lesson"
     assert infer_moment_layer(context) == LAYER_AFFECT_CONTEXT
     assert can_moment_be_recall_context(context) is True
     assert can_moment_be_direct_seed(context) is False
+    context_debug = moment_layer_debug(context)
+    assert context_debug["layer"] == LAYER_AFFECT_CONTEXT
+    assert context_debug["parent_layer"] == LAYER_ANCHOR
+    assert context_debug["context_only"] is True
+    assert context_debug["can_direct_seed"] is False
 
 
 def test_favorite_layer_uses_separate_policy_but_content_can_still_seed():

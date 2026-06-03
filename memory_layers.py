@@ -346,6 +346,69 @@ def can_bucket_be_recent_context(bucket: dict[str, Any] | None, *, explicit_look
     return layer == LAYER_DYNAMIC
 
 
+def bucket_layer_debug(bucket: dict[str, Any] | None, *, explicit_lookup: bool = False) -> dict[str, Any]:
+    bucket = bucket if isinstance(bucket, dict) else {}
+    meta = _metadata(bucket)
+    layer = infer_bucket_layer(bucket)
+    policy = policy_for_layer(layer)
+    return {
+        **_policy_debug(policy),
+        "can_related_target": can_bucket_be_related_target(bucket, explicit_lookup=explicit_lookup),
+        "can_recent_context": can_bucket_be_recent_context(bucket, explicit_lookup=explicit_lookup),
+        "writer": _writer_debug(
+            meta.get("memory_subject") or meta.get("bucket_memory_subject"),
+            meta.get("memory_layer") or meta.get("bucket_memory_layer"),
+            meta.get("memory_classification_source") or meta.get("bucket_memory_classification_source"),
+        ),
+    }
+
+
+def moment_layer_debug(moment: dict[str, Any] | None, *, explicit_lookup: bool = False) -> dict[str, Any]:
+    moment = moment if isinstance(moment, dict) else {}
+    meta = _moment_metadata(moment)
+    layer = infer_moment_layer(moment)
+    policy = policy_for_layer(layer)
+    parent_policy = _parent_policy_for_moment(moment)
+    return {
+        **_policy_debug(policy),
+        "parent_layer": parent_policy.layer,
+        "section": str(moment.get("section") or ""),
+        "context_only": is_context_only_section(moment.get("section")),
+        "can_direct_seed": can_moment_be_direct_seed(moment, explicit_lookup=explicit_lookup),
+        "can_recall_context": can_moment_be_recall_context(moment),
+        "can_related_target": can_moment_be_related_target(moment, explicit_lookup=explicit_lookup),
+        "writer": _writer_debug(
+            meta.get("memory_subject") or meta.get("bucket_memory_subject"),
+            meta.get("memory_layer") or meta.get("bucket_memory_layer"),
+            meta.get("memory_classification_source") or meta.get("bucket_memory_classification_source"),
+        ),
+    }
+
+
+def _policy_debug(policy: MemoryLayerPolicy) -> dict[str, Any]:
+    return {
+        "layer": policy.layer,
+        "direct_seed_policy": policy.direct_seed_policy,
+        "render_policy": policy.render_policy,
+        "gateway_section": policy.gateway_section,
+        "cooldown_policy": policy.cooldown_policy,
+        "diffusion_policy": policy.diffusion_policy,
+        "can_diffuse": policy.can_diffuse,
+        "preserves_original": policy.preserves_original,
+    }
+
+
+def _writer_debug(subject: object, layer: object, source: object = "") -> dict[str, str]:
+    subject_text = normalize_write_subject(subject)
+    layer_text = normalize_write_layer(layer)
+    return {
+        "memory_subject": subject_text,
+        "memory_layer": layer_text,
+        "memory_classification_source": str(source or ""),
+        "runtime_layer_hint": runtime_layer_from_write_classification(layer_text, subject_text),
+    }
+
+
 def is_context_only_section(section: object) -> bool:
     return _lower(section) in CONTEXT_ONLY_SECTIONS
 

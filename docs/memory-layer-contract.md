@@ -114,6 +114,8 @@ The runtime answers "which layer is this?" with `memory_layers.py`, then applies
 
 This separation is important. A moment can be searchable context without being allowed to prove the current topic.
 
+Debug surfaces should expose the same runtime decision. `inspect_moments`, `inspect_diffusion`, `/api/breath-debug`, and Gateway injection debug include `layer_debug`, which shows the inferred layer, writer hint, and whether the item can direct-seed, appear as related memory, or enter recent context.
+
 ## Injection Order
 
 Gateway dynamic context should stay quiet and ordered:

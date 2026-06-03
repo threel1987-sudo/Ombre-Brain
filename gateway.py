@@ -45,11 +45,13 @@ from memory_relevance import (
 )
 from memory_layers import (
     CONTEXT_ONLY_SECTIONS,
+    bucket_layer_debug,
     can_bucket_be_recent_context,
     can_bucket_be_related_target,
     can_moment_be_direct_seed,
     can_moment_be_recall_context,
     can_moment_be_related_target,
+    moment_layer_debug,
 )
 from recall_policy import RecallPolicy
 from memory_nodes import MemoryNodeStore
@@ -3998,7 +4000,12 @@ class GatewayService:
         remaining = max(0, self.inject_total_budget - stable_tokens)
         return stable_context, self._trim_text(dynamic_context, remaining)
 
-    def _format_suppressed_bucket_debug(self, item: dict) -> dict[str, Any]:
+    def _format_suppressed_bucket_debug(
+        self,
+        item: dict,
+        *,
+        explicit_lookup: bool = False,
+    ) -> dict[str, Any]:
         bucket = item.get("bucket") if isinstance(item, dict) else {}
         if not isinstance(bucket, dict):
             bucket = {}
@@ -4017,8 +4024,34 @@ class GatewayService:
                 else None
             ),
             "recall_policy_debug": debug if isinstance(debug, dict) else {},
+            "layer_debug": bucket_layer_debug(bucket, explicit_lookup=explicit_lookup),
             "content_preview": self._clip_text(strip_wikilinks(str(bucket.get("content") or "")), 180),
         }
+
+    def _format_moment_debug(
+        self,
+        moment: dict,
+        *,
+        explicit_lookup: bool = False,
+        include_text: bool = False,
+    ) -> dict[str, Any]:
+        payload = {
+            "bucket_id": str(moment.get("bucket_id") or ""),
+            "bucket_name": self._moment_bucket_title(moment),
+            "moment_id": str(moment.get("moment_id") or ""),
+            "section": moment.get("section"),
+            "admission_reason": str(moment.get("admission_reason") or moment.get("_admission_reason") or ""),
+            "score": self._safe_float(moment.get("score"), 0.0),
+            "rerank_score": (
+                self._safe_float(moment.get("rerank_score"), 0.0)
+                if moment.get("rerank_score") is not None
+                else None
+            ),
+            "layer_debug": moment_layer_debug(moment, explicit_lookup=explicit_lookup),
+        }
+        if include_text:
+            payload["text_preview"] = self._moment_text(moment, 180)
+        return payload
 
     def _build_injection_debug_payload(
         self,
@@ -4049,6 +4082,7 @@ class GatewayService:
         ]
         diffused_bucket_ids = self._extract_bucket_ids_from_context(related_memory)
         injected_bucket_ids = list(dict.fromkeys(recalled_bucket_ids + diffused_bucket_ids + favorite_ids))
+        explicit_lookup = self._query_explicitly_requests_caution_memory(query)
         return {
             "model": model,
             "query_preview": self._clip_text(query, 500),
@@ -4060,26 +4094,17 @@ class GatewayService:
             "recalled_bucket_ids": recalled_bucket_ids,
             "diffused_bucket_ids": diffused_bucket_ids,
             "recalled_moment_ids": recalled_moment_ids,
+            "recalled_moment_debug": [
+                self._format_moment_debug(moment, explicit_lookup=explicit_lookup)
+                for moment in recalled_moments[:20]
+            ],
             "diffused_moment_ids": self._extract_moment_ids_from_context(related_memory),
             "suppressed_bucket_candidates": [
-                self._format_suppressed_bucket_debug(item)
+                self._format_suppressed_bucket_debug(item, explicit_lookup=explicit_lookup)
                 for item in (suppressed_buckets or [])[:20]
             ],
             "suppressed_candidates": [
-                {
-                    "bucket_id": str(moment.get("bucket_id") or ""),
-                    "bucket_name": self._moment_bucket_title(moment),
-                    "moment_id": str(moment.get("moment_id") or ""),
-                    "section": moment.get("section"),
-                    "admission_reason": str(moment.get("admission_reason") or "suppressed"),
-                    "score": self._safe_float(moment.get("score"), 0.0),
-                    "rerank_score": (
-                        self._safe_float(moment.get("rerank_score"), 0.0)
-                        if moment.get("rerank_score") is not None
-                        else None
-                    ),
-                    "text_preview": self._moment_text(moment, 180),
-                }
+                self._format_moment_debug(moment, explicit_lookup=explicit_lookup, include_text=True)
                 for moment in (suppressed_moments or [])[:20]
             ],
             "context_mode": context_mode,

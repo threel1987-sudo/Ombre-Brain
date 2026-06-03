@@ -2194,6 +2194,9 @@ def test_gateway_body_query_injects_moment_chain(
     assert debug_payload["injected_bucket_ids"]
     assert set(debug_payload["recalled_bucket_ids"]).issubset(set(debug_payload["injected_bucket_ids"]))
     assert debug_payload["recalled_moment_ids"]
+    assert debug_payload["recalled_moment_debug"]
+    assert debug_payload["recalled_moment_debug"][0]["layer_debug"]["can_direct_seed"] is True
+    assert debug_payload["recalled_moment_debug"][0]["layer_debug"]["layer"] == "dynamic_memory"
     assert debug_payload["diffused_moment_ids"]
     assert "Recalled Memory" in debug_payload["dynamic_context"]
     assert "Diffused Memory" in debug_payload["dynamic_context"]
@@ -3687,6 +3690,8 @@ def test_gateway_low_confidence_candidate_does_not_leak_through_recent_context(
     assert suppressed_bucket["bucket_name"] == "一封情书"
     assert suppressed_bucket["admission_reason"] == "query_topic_evidence_missing"
     assert suppressed_bucket["semantic_score"] == 0.56
+    assert suppressed_bucket["layer_debug"]["layer"] == "dynamic_memory"
+    assert suppressed_bucket["layer_debug"]["can_recent_context"] is True
     assert suppressed_bucket["recall_policy_debug"]["has_topic_evidence"] is False
     assert suppressed_bucket["recall_policy_debug"]["auto"] is True
     assert "情书里写过" in suppressed_bucket["content_preview"]

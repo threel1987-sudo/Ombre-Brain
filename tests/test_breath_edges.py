@@ -359,9 +359,11 @@ async def test_inspect_diffusion_exposes_scores_facets_and_paths(patch_breath):
     assert result["query_facets"]["affect"]["attachment"] > 0
     assert result["seeds"][0]["bucket_id"] == "A"
     assert result["seeds"][0]["seed_score"] == 1.0
+    assert result["seeds"][0]["layer_debug"]["layer"] == "dynamic_memory"
     assert len(result["hits"]) == 1
     hit = result["hits"][0]
     assert hit["bucket_id"] == "B"
+    assert hit["layer_debug"]["layer"] == "dynamic_memory"
     assert hit["score"] > 0
     assert hit["salience"] > 0
     assert hit["resonance"] > 1.0
@@ -388,6 +390,8 @@ async def test_inspect_moments_indexes_bucket_sections_and_comments(patch_breath
             ]
         ),
     )
+    bucket["metadata"]["memory_subject"] = "relationship"
+    bucket["metadata"]["memory_layer"] = "relationship_lesson"
     bucket["metadata"]["comments"] = [
         {
             "id": "c1",
@@ -403,8 +407,12 @@ async def test_inspect_moments_indexes_bucket_sections_and_comments(patch_breath
 
     assert result["status"] == "ok"
     assert result["mode"] == "bucket"
+    assert result["bucket_layer_debug"]["layer"] == "long_term_anchor"
     assert result["count"] == 3
     assert [moment["section"] for moment in result["moments"]] == ["original", "feeling", "comment"]
+    assert result["moments"][0]["layer_debug"]["layer"] == "long_term_anchor"
+    assert result["moments"][2]["layer_debug"]["layer"] == "affect_context"
+    assert result["moments"][2]["layer_debug"]["parent_layer"] == "long_term_anchor"
     assert result["moments"][0]["text"] == "小雨说：99。"
     assert result["moments"][2]["metadata"]["comment_kind"] == "feel"
     assert bucket_mgr.touched == []
