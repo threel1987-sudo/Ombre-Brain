@@ -980,6 +980,7 @@ df0a41d Expose recall modes in dashboard config
 
 - Gateway 冷却：`cooldown_hours`、`skip_recent_rounds`
 - Recent Context：`recent_context_cooldown_hours`、`recent_context_reentry_idle_hours`、`recent_context_budget`
+- Recalled/Diffused 预算：`recalled_memory_budget`、`related_memory_budget`
 - Query 旧记忆随机回响：`recall.query_resurface_enabled`
 - 直命中展示：`direct_render_mode=auto|compact|full`
 - 召回对照档：`retrieval_mode=graph|bucket`
@@ -1030,3 +1031,12 @@ recall:
 - `true`：恢复旧行为，直命中稀疏且没有 related 时，query breath 可以按概率追加久未碰过的旧记忆。
 
 这不是 Gateway 注入参数，保存后 `breath()` 当前进程立即生效；旧记忆抽卡仍更推荐显式调用 `resurface()`。
+
+## 2026-06-04 追加：Dashboard 可调 Recalled/Diffused 预算
+
+Gateway 的两块动态记忆预算已接入 Dashboard 配置页、Gateway `/api/config` 热更新和 memory service `/api/config` 转发：
+
+- `recalled_memory_budget`：`Recalled Memory` 直命中预算，默认 `400`。
+- `related_memory_budget`：`Diffused Memory` 扩散背景预算，默认 `220`；设 `0` 可以关闭 Gateway 扩散注入。
+
+这只改变 Gateway 注入预算，不改 direct admission、diffusion gate 或 `breath()` 的 MCP 参数。

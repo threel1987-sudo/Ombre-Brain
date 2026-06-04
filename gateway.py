@@ -275,6 +275,8 @@ class GatewayService:
                 "recent_context_cooldown_hours": self.recent_context_cooldown_hours,
                 "recent_context_reentry_idle_hours": self.recent_context_reentry_idle_hours,
                 "recent_context_budget": self.recent_budget,
+                "recalled_memory_budget": self.recalled_budget,
+                "related_memory_budget": self.related_memory_budget,
                 "direct_render_mode": self.direct_render_mode,
                 "retrieval_mode": self.retrieval_mode,
                 "reranker": {
@@ -314,6 +316,8 @@ class GatewayService:
             "recent_context_cooldown_hours": self.recent_context_cooldown_hours,
             "recent_context_reentry_idle_hours": self.recent_context_reentry_idle_hours,
             "recent_context_budget": self.recent_budget,
+            "recalled_memory_budget": self.recalled_budget,
+            "related_memory_budget": self.related_memory_budget,
             "direct_render_mode": self.direct_render_mode,
             "retrieval_mode": self.retrieval_mode,
         }
@@ -359,6 +363,14 @@ class GatewayService:
             self.recent_budget = max(0, int(payload["recent_context_budget"]))
             self.gateway_cfg["recent_context_budget"] = self.recent_budget
             updated.append("gateway.recent_context_budget")
+        if "recalled_memory_budget" in payload:
+            self.recalled_budget = max(0, int(payload["recalled_memory_budget"]))
+            self.gateway_cfg["recalled_memory_budget"] = self.recalled_budget
+            updated.append("gateway.recalled_memory_budget")
+        if "related_memory_budget" in payload:
+            self.related_memory_budget = max(0, int(payload["related_memory_budget"]))
+            self.gateway_cfg["related_memory_budget"] = self.related_memory_budget
+            updated.append("gateway.related_memory_budget")
         if "direct_render_mode" in payload:
             self.direct_render_mode = self._normalize_direct_render_mode(payload["direct_render_mode"])
             self.gateway_cfg["direct_render_mode"] = self.direct_render_mode

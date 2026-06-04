@@ -352,6 +352,8 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
         recent_context_cooldown_hours=6,
         recent_context_reentry_idle_hours=24,
         recent_context_budget=300,
+        recalled_memory_budget=400,
+        related_memory_budget=220,
         direct_render_mode="auto",
         retrieval_mode="graph",
     )
@@ -369,6 +371,8 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
                     "recent_context_cooldown_hours": 4.5,
                     "recent_context_reentry_idle_hours": 24,
                     "recent_context_budget": 240,
+                    "recalled_memory_budget": 520,
+                    "related_memory_budget": 180,
                     "direct_render_mode": "full",
                     "retrieval_mode": "bucket",
                 },
@@ -389,6 +393,8 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
         "gateway.recent_context_cooldown_hours",
         "gateway.recent_context_reentry_idle_hours",
         "gateway.recent_context_budget",
+        "gateway.recalled_memory_budget",
+        "gateway.related_memory_budget",
         "gateway.direct_render_mode",
         "gateway.retrieval_mode",
         "memory_diffusion.top_k",
@@ -402,6 +408,8 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
     assert service.recent_context_cooldown_hours == pytest.approx(4.5)
     assert service.recent_context_reentry_idle_hours == pytest.approx(24)
     assert service.recent_budget == 240
+    assert service.recalled_budget == 520
+    assert service.related_memory_budget == 180
     assert service.direct_render_mode == "full"
     assert service.retrieval_mode == "bucket"
     assert service.diffusion_options.top_k == 3
@@ -414,6 +422,8 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
     assert response.json()["gateway"]["recent_context_cooldown_hours"] == pytest.approx(4.5)
     assert response.json()["gateway"]["recent_context_reentry_idle_hours"] == pytest.approx(24)
     assert response.json()["gateway"]["recent_context_budget"] == 240
+    assert response.json()["gateway"]["recalled_memory_budget"] == 520
+    assert response.json()["gateway"]["related_memory_budget"] == 180
     assert response.json()["memory_diffusion"]["chain_walk_enabled"] is True
 
 

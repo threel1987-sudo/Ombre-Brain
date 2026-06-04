@@ -6121,6 +6121,8 @@ async def api_config_get(request):
             "recent_context_cooldown_hours": gateway_cfg.get("recent_context_cooldown_hours", 6),
             "recent_context_reentry_idle_hours": gateway_cfg.get("recent_context_reentry_idle_hours", 24),
             "recent_context_budget": gateway_cfg.get("recent_context_budget", 300),
+            "recalled_memory_budget": gateway_cfg.get("recalled_memory_budget", 400),
+            "related_memory_budget": gateway_cfg.get("related_memory_budget", 220),
             "direct_render_mode": _normalize_direct_render_mode(gateway_cfg.get("direct_render_mode", "auto")),
             "retrieval_mode": _normalize_retrieval_mode(gateway_cfg.get("retrieval_mode", "graph")),
         },
@@ -6326,6 +6328,14 @@ async def api_config_update(request):
             gateway_cfg["recent_context_budget"] = max(0, int(g["recent_context_budget"]))
             gateway_hot_update_body["recent_context_budget"] = gateway_cfg["recent_context_budget"]
             updated.append("gateway.recent_context_budget")
+        if "recalled_memory_budget" in g:
+            gateway_cfg["recalled_memory_budget"] = max(0, int(g["recalled_memory_budget"]))
+            gateway_hot_update_body["recalled_memory_budget"] = gateway_cfg["recalled_memory_budget"]
+            updated.append("gateway.recalled_memory_budget")
+        if "related_memory_budget" in g:
+            gateway_cfg["related_memory_budget"] = max(0, int(g["related_memory_budget"]))
+            gateway_hot_update_body["related_memory_budget"] = gateway_cfg["related_memory_budget"]
+            updated.append("gateway.related_memory_budget")
         if "direct_render_mode" in g:
             gateway_cfg["direct_render_mode"] = _normalize_direct_render_mode(g["direct_render_mode"])
             gateway_hot_update_body["direct_render_mode"] = gateway_cfg["direct_render_mode"]
@@ -6443,6 +6453,10 @@ async def api_config_update(request):
                     )
                 if "recent_context_budget" in body["gateway"]:
                     sc_gateway["recent_context_budget"] = max(0, int(body["gateway"]["recent_context_budget"]))
+                if "recalled_memory_budget" in body["gateway"]:
+                    sc_gateway["recalled_memory_budget"] = max(0, int(body["gateway"]["recalled_memory_budget"]))
+                if "related_memory_budget" in body["gateway"]:
+                    sc_gateway["related_memory_budget"] = max(0, int(body["gateway"]["related_memory_budget"]))
                 if "direct_render_mode" in body["gateway"]:
                     sc_gateway["direct_render_mode"] = _normalize_direct_render_mode(body["gateway"]["direct_render_mode"])
                 if "retrieval_mode" in body["gateway"]:
