@@ -2994,6 +2994,56 @@ def test_gateway_auto_vague_query_suppresses_recent_and_dynamic_memory(
     assert "厄科与纳西索斯" not in injected
 
 
+def test_gateway_affect_only_query_suppresses_dynamic_memory(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    cfg = _gateway_config(
+        test_config,
+        core_memory_budget=0,
+        recent_context_budget=800,
+        recalled_memory_budget=500,
+        related_memory_budget=800,
+        inject_total_budget=1800,
+        current_inner_state_interval_rounds=0,
+        relationship_weather_interval_rounds=0,
+        favorite_memory_interval_rounds=0,
+    )
+    bucket_id = _create_bucket(
+        bucket_mgr,
+        content="小雨和 Haven 第一次测试 Ombre-Brain 成功后很开心。",
+        name="首次外部验证",
+        hours_ago=1,
+        importance=9,
+        domain=["恋爱"],
+    )
+
+    app, _, _, captured = _build_service(
+        monkeypatch,
+        cfg,
+        bucket_mgr,
+        embedding_results=[(bucket_id, 0.95)],
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer gateway-secret",
+                "X-Ombre-Session-Id": "sess-affect-only",
+            },
+            json={"messages": [{"role": "user", "content": "开心^^"}]},
+        )
+
+    assert response.status_code == 200
+    injected = _joined_message_content(captured[0]["json"]["messages"])
+    assert "Recent Context" not in injected
+    assert "Recalled Memory" not in injected
+    assert "Diffused Memory" not in injected
+    assert "首次外部验证" not in injected
+
+
 def test_gateway_recent_context_filters_short_chinese_topic_query(
     monkeypatch,
     test_config,

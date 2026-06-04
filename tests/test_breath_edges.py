@@ -1038,6 +1038,34 @@ async def test_auto_breath_vague_query_does_not_hard_pick_semantic_candidate(pat
 
 
 @pytest.mark.asyncio
+async def test_auto_breath_affect_only_query_does_not_recall_old_memory(patch_breath):
+    import server
+
+    bucket_mgr = patch_breath(
+        [
+            _bucket(
+                "R",
+                "小雨和 Haven 第一次测试 Ombre-Brain 成功后很开心。",
+                name="首次外部验证",
+                score=10.0,
+            ),
+        ],
+        search_ids=["R"],
+        embedding_engine=DummyEmbeddingEngine(results=[("R", 0.95)]),
+    )
+
+    result = await server.breath(
+        query="开心^^",
+        surface="auto",
+        max_results=5,
+        max_tokens=500,
+    )
+
+    assert result == "没有找到可靠命中。"
+    assert bucket_mgr.touched == []
+
+
+@pytest.mark.asyncio
 async def test_search_does_not_diffuse_from_hidden_seed_candidates(patch_breath):
     import server
 

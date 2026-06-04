@@ -188,6 +188,100 @@ AUTO_VAGUE_FILLER_TERMS = frozenset(
         "anything",
     }
 )
+AFFECT_ONLY_QUERY_TERMS = frozenset(
+    {
+        "开心",
+        "高兴",
+        "快乐",
+        "幸福",
+        "甜",
+        "温柔",
+        "感动",
+        "安心",
+        "舒服",
+        "喜欢",
+        "难过",
+        "伤心",
+        "痛苦",
+        "委屈",
+        "焦虑",
+        "烦",
+        "烦躁",
+        "生气",
+        "愤怒",
+        "害怕",
+        "恐惧",
+        "低落",
+        "沮丧",
+        "崩溃",
+        "累",
+        "疲惫",
+        "想哭",
+        "不开心",
+        "不高兴",
+        "不安",
+        "孤独",
+        "寂寞",
+        "emo",
+        "sad",
+        "happy",
+        "angry",
+        "tired",
+        "anxious",
+        "lonely",
+        "upset",
+    }
+)
+AFFECT_ONLY_QUERY_FILLERS = frozenset(
+    {
+        "我",
+        "你",
+        "他",
+        "她",
+        "它",
+        "我们",
+        "你们",
+        "他们",
+        "她们",
+        "今天",
+        "昨天",
+        "刚才",
+        "刚刚",
+        "现在",
+        "当前",
+        "有点",
+        "一点",
+        "一点点",
+        "很",
+        "好",
+        "超",
+        "太",
+        "特别",
+        "非常",
+        "真的",
+        "确实",
+        "有些",
+        "有点儿",
+        "了",
+        "啦",
+        "呢",
+        "啊",
+        "呀",
+        "嘛",
+        "吗",
+        "吧",
+        "qwq",
+        "tt",
+        "so",
+        "very",
+        "really",
+        "abit",
+        "bit",
+        "little",
+        "today",
+        "now",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -284,6 +378,8 @@ class RecallPolicy:
             return False
         if query_has_explicit_entity_marker(text) or query_has_technical_recall_marker(text):
             return False
+        if self._is_affect_only_query(text):
+            return True
         lowered = text.lower()
         if not any(marker in lowered for marker in AUTO_VAGUE_RECALL_MARKERS):
             return False
@@ -292,6 +388,8 @@ class RecallPolicy:
     def is_auto_concrete_topic_query(self, query: str) -> bool:
         text = str(query or "").strip()
         if not text or self.is_auto_query_too_vague(text):
+            return False
+        if self._is_affect_only_query(text):
             return False
         if query_has_explicit_entity_marker(text) or query_has_technical_recall_marker(text):
             return True
@@ -340,6 +438,17 @@ class RecallPolicy:
                 stripped = stripped.replace(cleaned, "")
         stripped = re.sub(r"[我你他她它的是了嘛吗呢啊呀欸诶吧哈嗯呜有里看查找问说]+", "", stripped)
         return len(stripped) >= 2
+
+    def _is_affect_only_query(self, query: str) -> bool:
+        compact = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(query or "").lower())
+        if not compact:
+            return False
+        stripped = compact
+        for term in sorted(AFFECT_ONLY_QUERY_FILLERS, key=len, reverse=True):
+            stripped = stripped.replace(term, "")
+        if not stripped:
+            return False
+        return stripped in AFFECT_ONLY_QUERY_TERMS
 
     def specific_query_terms(self, query: str) -> list[str]:
         raw = str(query or "")
