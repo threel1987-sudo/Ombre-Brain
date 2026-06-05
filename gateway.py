@@ -4604,6 +4604,38 @@ class GatewayService:
         has_emotion = any(term and term in text for term in emotion_terms)
         return has_emotion and (has_temporal or has_reason)
 
+    def _emotional_reason_lookup_fallback_plan(self, query: str) -> dict[str, Any] | None:
+        terms = self._emotional_reason_lookup_terms(query)
+        if not terms:
+            return None
+        anchor = terms[0]
+        return {
+            "should_search": True,
+            "too_vague": False,
+            "queries": [
+                {
+                    "query": anchor,
+                    "must_terms": [anchor],
+                    "intent": "deterministic emotional reason lookup",
+                    "risk": "medium",
+                }
+            ],
+        }
+
+    @staticmethod
+    def _emotional_reason_lookup_terms(query: str) -> list[str]:
+        text = str(query or "").strip().lower()
+        compound_terms = (
+            "激动哭", "感动哭", "高兴哭", "开心哭", "难过哭", "委屈哭",
+            "哭了", "想哭",
+        )
+        fallback_terms = ("激动", "感动", "难过", "委屈", "崩溃", "破防")
+        terms: list[str] = []
+        for term in compound_terms + fallback_terms:
+            if term in text and term not in terms:
+                terms.append(term)
+        return terms[:2]
+
     def _query_looks_multi_topic(self, query: str) -> bool:
         text = str(query or "").strip()
         if not text:
@@ -4967,7 +4999,11 @@ class GatewayService:
             plan, error = await self._call_query_planner(query)
             if error:
                 planner_debug["errors"].append(error)
-            elif plan:
+                if trigger_reason == "emotional_reason_lookup":
+                    plan = self._emotional_reason_lookup_fallback_plan(query)
+                    if plan:
+                        planner_debug["errors"].append("query_planner_fallback_used")
+            if plan:
                 planner_debug["queries"] = plan.get("queries", [])
                 if plan.get("should_search") and not plan.get("too_vague"):
                     supplemental_items: list[dict] = []
