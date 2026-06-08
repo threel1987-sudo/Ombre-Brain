@@ -495,7 +495,16 @@ curl -sS http://127.0.0.1:18002/health
 COMPOSE_FILE=compose.hk.yml bash scripts/update_deploy.sh
 ```
 
-2026-06-07 之后，旧 `main` 已换到新版主线，旧版留档在 `archive/main-before-p0-20260607`。老部署目录如果还停在旧 `main`，不要手动普通 `git pull`；优先运行 `bash scripts/one_click.sh` 里的“更新版本”。脚本会先询问是否备份记忆桶，默认备份 `buckets/data`、`state`、`config.yaml` 和 `.env`；更新代码时会在 tracked 文件干净的情况下把旧 HEAD 备份成 `archive/local-main-before-reset-*`，再切到新版 `origin/main`。如果当前 checkout 本身就在 `archive/*` 分支，且没有显式设置 `OMBRE_BRANCH`，更新目标也会默认改成 `main`。`.env`、`buckets/`、`state/` 这类未跟踪/挂载文件不会因为 git reset 被删除。
+2026-06-07 之后，旧 `main` 已换到新版主线，旧版留档在 `archive/main-before-p0-20260607`。如果老部署的 `origin` 还指向 `P0luz/Ombre-Brain`，需要先把部署目录切到二改版主仓，再运行新版更新菜单：
+
+```bash
+cd /opt/Ombre-Brain
+curl -fsSL https://raw.githubusercontent.com/Yinglianchun/Ombre-Brain/main/scripts/bootstrap_update.sh | bash
+bash scripts/one_click.sh
+# 菜单：2. 更新版本 -> 选择部署环境 -> 默认备份记忆桶 -> 更新
+```
+
+`bootstrap_update.sh` 只改 git remote 和代码 checkout。它会在 tracked 文件干净时把当前 HEAD 备份成 `archive/bootstrap-before-main-*`，再切到 `Yinglianchun/Ombre-Brain` 的新版 `main`；`.env`、`config.yaml`、`buckets/`、`state/` 这类未跟踪/挂载文件不会因为这一步被删除。已经在二改版仓库里的部署，可以直接运行 `bash scripts/one_click.sh` 的“更新版本”。更新菜单会先询问是否备份记忆桶，默认备份 `buckets/data`、`state`、`config.yaml` 和 `.env`；遇到主线换轨这类分叉时，会在 tracked 文件干净的情况下把旧 HEAD 备份成 `archive/local-main-before-reset-*`，再切到新版 `origin/main`。如果当前 checkout 本身就在 `archive/*` 分支，且没有显式设置 `OMBRE_BRANCH`，更新目标也会默认改成 `main`。
 
 如果 VPS 上有直接改过仓库里的 tracked 文件，脚本会停下。先 `git stash push -u -m pre-deploy-direct-vps-edits-$(date +%Y%m%d-%H%M%S)`，再重新运行更新脚本。
 
@@ -1149,6 +1158,9 @@ COMPOSE_FILE=compose.hk.yml bash scripts/doctor.sh
 # 一键更新：拉代码、重建/更新容器、健康检查
 COMPOSE_FILE=compose.hk.yml bash scripts/update_deploy.sh
 
+# 旧部署还指向原仓库时，先把 remote 和代码切到二改版 main
+curl -fsSL https://raw.githubusercontent.com/Yinglianchun/Ombre-Brain/main/scripts/bootstrap_update.sh | bash
+
 # 服务状态
 docker compose -f compose.hk.yml ps
 docker compose -f compose.hk.yml logs --tail=120 ombre-brain
@@ -1216,6 +1228,7 @@ docker compose -f compose.hk.yml exec -T ombre-brain python scripts/cleanup_migr
 
 - `scripts/one_click.sh`：新手入口。菜单包含首次部署、更新版本、错误排查、备份当前部署、删除旧备份包、记忆桶格式转换、向量库相关、从原版 Ombre-Brain 迁移。首次部署会先选择 `VPS / Windows / Python 直跑`，再选择 `只用 Ombre MCP 部分 / 部署全部`。只用 MCP 时只启动 MCP 工具和 Dashboard，不配置、不启动 Gateway；部署全部时才会继续填写 Gateway 上游、token 和 OpenAI-compatible 客户端地址。VPS 和 Windows 走 Docker 并生成本机专用的 `compose.local.yml`；Python 直跑适合手机 Termux、Linux、Windows 无 Docker，会生成 `start_local.sh` 和 `start_local.ps1`，同时保留 `start_mobile.sh` 兼容旧教程。模型配置和 key 会交互式填写，key 写入 `.env`，非密钥配置写入 `config.yaml`；embedding 启用后会继续提示 reranker 模型，默认 `Qwen/Qwen3-Reranker-4B`，通常复用 embedding 的 SiliconFlow base_url/key，也可单独填写 `OMBRE_RERANKER_API_KEY`。生成的 config 已包含当前 main 的 memory diffusion、query planner、portrait、dream inject 默认值和自动写入门卫。最后生成 `connection_guide.txt`，除了 URL / token / header，也会写 handoff、Just Now、Darkroom、Dream Context 和 Dashboard 批量删除提示。
 - `./ob`：短入口，等同于 `bash scripts/one_click.sh`。也可以在菜单里选“安装短命令 ob”，写入当前用户的 shell 配置；之后任意位置输入 `ob` 就能打开菜单。
+- `scripts/bootstrap_update.sh`：给旧部署用的前置脚本。旧目录如果还把 `origin` 指向原仓库，可以先用它把 remote 改到 `Yinglianchun/Ombre-Brain`，备份当前代码分支，再切到新版 `main`。它不删除 `.env`、`config.yaml`、`buckets/`、`state/` 这类未跟踪/挂载数据；tracked 文件有本地修改时会停下。
 - Windows 上运行 `.sh` 脚本建议打开 Git Bash 再执行；不要在 PowerShell 里直接输 `bash ...`，否则少数机器可能会调用到 WSL 的 `bash.exe`。
 - `scripts/doctor.sh`：适合“更新后不能用、端口不通、怀疑 key 没配好”。它只读检查，不会重启服务、不改配置、不打印 key。会提示 `.env/config.yaml`、Docker Compose 状态、健康接口、容器内环境变量和最近错误日志；如果 compose 里没有启用 Gateway，会自动跳过 Gateway token 检查。
 - `scripts/update_deploy.sh`：适合“我只想更新到最新版”。它会从当前分支或 `OMBRE_BRANCH` 指定分支拉取代码；能 fast-forward 就直接前进，遇到 2026-06-07 主线换轨这类分叉时，会在 tracked 文件干净的部署目录里先建本地备份分支再 reset 到新版远端。之后如果 compose 里是 `build:` 就重建镜像，否则先 pull 镜像，再启动容器；最后检查 Ombre-Brain 健康，如果 compose 里有 `ombre-gateway`，也会检查 Gateway 健康。
