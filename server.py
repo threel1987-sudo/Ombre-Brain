@@ -6076,8 +6076,9 @@ async def hold(
     source_bucket: str = "",
     valence: float = -1,
     arousal: float = -1,
+    title: str = "",
 ) -> str:
-    """写一条长期记忆。单个事实/承诺/偏好用 hold；旧记忆的新感受用 comment_bucket；悄悄话用 whisper=True。"""
+    """写一条长期记忆。单个事实/承诺/偏好用 hold；旧记忆的新感受用 comment_bucket；悄悄话用 whisper=True。title 可选，传了就用你给的标题，不传则自动生成。"""
     await decay_engine.ensure_started()
 
     # --- Input validation / 输入校验 ---
@@ -6157,7 +6158,7 @@ async def hold(
     valence = analysis["valence"]
     arousal = analysis["arousal"]
     auto_tags = analysis["tags"]
-    suggested_name = analysis.get("suggested_name", "")
+    suggested_name = title.strip() or analysis.get("suggested_name", "")
 
     all_tags = list(dict.fromkeys(auto_tags + extra_tags))
     classification = normalize_write_classification(
@@ -6291,8 +6292,8 @@ def _looks_like_operit_auto_grow_content(content: str) -> bool:
 
 
 @mcp.tool()
-async def grow(content: str, auto: bool = False, source: str = "", context: Context | None = None) -> str:
-    """把筛过的长片段拆成少量长期记忆；单条事实优先 hold，旧记忆补感受优先 comment_bucket。"""
+async def grow(content: str, auto: bool = False, source: str = "", title: str = "", context: Context | None = None) -> str:
+    """把筛过的长片段拆成少量长期记忆；单条事实优先 hold，旧记忆补感受优先 comment_bucket。title 可选，短内容时传了就用你给的标题。"""
     await decay_engine.ensure_started()
 
     if not content or not content.strip():
@@ -6346,7 +6347,7 @@ async def grow(content: str, auto: bool = False, source: str = "", context: Cont
             domain=analysis.get("domain", ["未分类"]),
             valence=analysis.get("valence", 0.5),
             arousal=analysis.get("arousal", 0.3),
-            name=analysis.get("suggested_name", ""),
+            name=title.strip() or analysis.get("suggested_name", ""),
             allow_merge=False,
             memory_subject=fast_classification["memory_subject"],
             memory_layer=fast_classification["memory_layer"],
@@ -7869,25 +7870,32 @@ async def api_bucket_update(request):
         return JSONResponse({"error": "invalid json body"}, status_code=400)
     if not isinstance(body, dict):
         return JSONResponse({"error": "json body must be an object"}, status_code=400)
-    if "content" not in body:
-        return JSONResponse({"error": "missing content"}, status_code=400)
 
-    content = str(body.get("content") or "").strip()
-    if not content:
-        return JSONResponse({"error": "empty content"}, status_code=400)
+    content = str(body.get("content") or "").strip() if "content" in body else None
+    name = str(body.get("name") or "").strip() if "name" in body else None
+
+    if content is None and name is None:
+        return JSONResponse({"error": "missing content or name"}, status_code=400)
 
     bucket = await bucket_mgr.get(bucket_id)
     if not bucket:
         return JSONResponse({"error": "not found"}, status_code=404)
 
     meta = bucket.get("metadata", {})
-    if _has_favorite_tag(meta.get("tags", [])) and not _has_favorite_reason(content):
-        return JSONResponse({"error": _favorite_reason_error()}, status_code=400)
-    ok = await bucket_mgr.update(
-        bucket_id,
-        content=content,
-        last_active=meta.get("last_active") or meta.get("created"),
-    )
+    if content is not None:
+        if not content:
+            return JSONResponse({"error": "empty content"}, status_code=400)
+        if _has_favorite_tag(meta.get("tags", [])) and not _has_favorite_reason(content):
+            return JSONResponse({"error": _favorite_reason_error()}, status_code=400)
+
+    update_kwargs = {}
+    if content is not None:
+        update_kwargs["content"] = content
+    if name is not None:
+        update_kwargs["name"] = name or None
+    update_kwargs["last_active"] = meta.get("last_active") or meta.get("created")
+
+    ok = await bucket_mgr.update(bucket_id, **update_kwargs)
     if not ok:
         return JSONResponse({"error": "update failed"}, status_code=500)
 

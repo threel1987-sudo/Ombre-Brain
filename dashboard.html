@@ -485,6 +485,25 @@
   .content-edit-form {
     margin-top: 12px;
   }
+  .title-edit-form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+  }
+  .title-edit-form input[type="text"] {
+    flex: 1;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: inherit;
+  }
+  .title-edit-form .content-edit-actions {
+    display: flex;
+    gap: 4px;
+  }
   .content-edit-form textarea {
     width: 100%;
     min-height: 220px;
@@ -4155,7 +4174,15 @@ async function showDetail(id) {
       '</form>';
     content.innerHTML =
       '<div class="detail-title-row">' +
-        '<h2>' + esc(meta.name || id) + '</h2>' +
+        '<h2 id="bucket-title-view">' + esc(meta.name || id) + '</h2>' +
+        '<button id="bucket-title-edit-button" type="button" class="detail-edit-button" onclick="startBucketTitleEdit()" aria-label="编辑标题" title="编辑标题">✎</button>' +
+        '<form id="bucket-title-edit" class="title-edit-form hidden" onsubmit="submitBucketTitleEdit(event, \'' + jsString(id) + '\')">' +
+          '<input name="title" type="text" value="' + escAttr(meta.name || '') + '" maxlength="40" placeholder="标题" />' +
+          '<div class="content-edit-actions">' +
+            '<button type="button" class="secondary" onclick="cancelBucketTitleEdit()">取消</button>' +
+            '<button type="submit">保存</button>' +
+          '</div>' +
+        '</form>' +
       '</div>' +
       '<div class="detail-meta">' +
         '<div class="field"><label>ID</label>' + esc(id) + '</div>' +
@@ -4310,6 +4337,56 @@ function formatMomentSource(ref) {
   var end = ref.end_line || '';
   var line = start ? ':' + start + (end && end !== start ? '-' + end : '') : '';
   return (path ? path + ' · ' : '') + source + line;
+}
+
+function startBucketTitleEdit() {
+  var view = document.getElementById('bucket-title-view');
+  var form = document.getElementById('bucket-title-edit');
+  var editButton = document.getElementById('bucket-title-edit-button');
+  if (!view || !form) return;
+  view.classList.add('hidden');
+  form.classList.remove('hidden');
+  if (editButton) editButton.classList.add('hidden');
+  var input = form.querySelector('input[name="title"]');
+  if (input) { input.focus(); input.select(); }
+}
+
+function cancelBucketTitleEdit() {
+  var view = document.getElementById('bucket-title-view');
+  var form = document.getElementById('bucket-title-edit');
+  var editButton = document.getElementById('bucket-title-edit-button');
+  if (!view || !form) return;
+  form.classList.add('hidden');
+  view.classList.remove('hidden');
+  if (editButton) editButton.classList.remove('hidden');
+}
+
+async function submitBucketTitleEdit(event, bucketId) {
+  event.preventDefault();
+  var form = event.target;
+  var input = form.querySelector('input[name="title"]');
+  var newName = (input.value || '').trim();
+  var button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  button.textContent = '保存中…';
+  try {
+    var res = await authFetch(BASE + '/api/bucket/' + encodeURIComponent(bucketId), {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: newName})
+    });
+    if (!res) return;
+    if (!res.ok) {
+      var data = await res.json().catch(() => ({}));
+      throw new Error(data.error || '保存失败');
+    }
+    await showDetail(bucketId);
+    await loadBuckets();
+  } catch (e) {
+    alert('保存标题失败: ' + e.message);
+    button.disabled = false;
+    button.textContent = '保存';
+  }
 }
 
 function startBucketContentEdit(bucketId) {
