@@ -1375,8 +1375,8 @@ class ReflectionEngine:
         requested = result.get("affect_anchor_needed")
         if isinstance(requested, str):
             requested = requested.strip().lower() in {"true", "yes", "1", "需要", "是"}
-        if isinstance(requested, bool):
-            return requested and not self._is_low_temperature_technical(bucket, all_tags)
+        if isinstance(requested, bool) and requested:
+            return not self._is_low_temperature_technical(bucket, all_tags)
         if self._is_low_temperature_technical(bucket, all_tags):
             return False
         if all_tags & emotional_tags:
