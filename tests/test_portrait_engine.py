@@ -29,6 +29,40 @@ def test_portrait_prompt_uses_neutral_evidence_state_maintainer(tmp_path, test_c
     assert not prompt.startswith("你是 Haven")
 
 
+def test_portrait_json_parser_accepts_fenced_object_with_tail(tmp_path, test_config):
+    engine = DailyPortraitMaintainer(
+        {
+            **test_config,
+            "portrait": {
+                "enabled": True,
+                "state_path": str(tmp_path / "state" / "portrait_state.json"),
+            },
+        }
+    )
+
+    parsed = engine._parse_json_object(
+        '```json\n{"daily_summary":"ok","add_recent":[]}\n```\n多余解释'
+    )
+
+    assert parsed == {"daily_summary": "ok", "add_recent": []}
+
+
+def test_portrait_completion_options_request_json_by_default(tmp_path, test_config):
+    engine = DailyPortraitMaintainer(
+        {
+            **test_config,
+            "portrait": {
+                "enabled": True,
+                "state_path": str(tmp_path / "state" / "portrait_state.json"),
+            },
+        }
+    )
+
+    options = engine._completion_options(max_tokens=100, temperature=0.1, json_response=True)
+
+    assert options["response_format"] == {"type": "json_object"}
+
+
 @pytest.mark.asyncio
 async def test_daily_portrait_maintainer_writes_evidence_bound_state_only(tmp_path, test_config, bucket_mgr):
     evidence_id = await bucket_mgr.create(
@@ -707,6 +741,45 @@ def test_portrait_fallback_extracts_recent_activity_without_scope(tmp_path, test
     assert patch["add_recent"] == []
     assert patch["add_recent_activity"][0]["text"] == "小雨最近在给 portrait maintainer 加最近在做什么"
     assert patch["add_recent_activity"][0]["evidence"] == [{"bucket_id": "project-bucket"}]
+    assert patch["move_to_staging"][0]["scope"] == "user"
+    assert patch["move_to_staging"][0]["text"] == "小雨最近在给 portrait maintainer 加最近在做什么"
+
+
+def test_portrait_fallback_can_seed_user_mid_term_from_project_material(tmp_path, test_config):
+    engine = DailyPortraitMaintainer(
+        {
+            **test_config,
+            "portrait": {
+                "enabled": True,
+                "state_path": str(tmp_path / "state" / "portrait_state.json"),
+            },
+        }
+    )
+    state = engine._empty_state()
+    patch = engine._fallback_patch(
+        {
+            "date": "2026-06-10",
+            "buckets": [
+                {
+                    "bucket_id": "project-bucket",
+                    "name": "portrait project",
+                    "tags": ["project_event"],
+                    "domain": ["记忆系统"],
+                    "source_date": "2026-06-10",
+                    "source_excerpt": "小雨正在调试 portrait maintainer，关注画像证据边界和 handoff 是否真实生效。",
+                    "confidence": 0.78,
+                }
+            ],
+        },
+        initial=True,
+    )
+
+    engine._seed_missing_mid_terms(patch, state)
+
+    user_mid = [item for item in patch["rewrite_mid_term"] if item["scope"] == "user"]
+    assert user_mid
+    assert "证据边界" in user_mid[0]["text"]
+    assert user_mid[0]["evidence"] == [{"bucket_id": "project-bucket"}]
 
 
 def test_handoff_recent_continuity_sorts_equal_timestamps_without_dict_compare(tmp_path, test_config):

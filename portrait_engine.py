@@ -174,7 +174,8 @@ class DailyPortraitMaintainer:
             or ""
         ).strip()
         self.temperature = float(cfg.get("temperature", reflection_cfg.get("temperature", 0.1)))
-        self.max_tokens = int(cfg.get("max_tokens", 1800))
+        self.max_tokens = int(cfg.get("max_tokens", 3200))
+        self.json_response_format = self._bool(cfg.get("json_response_format", True), True)
         self.state_path = self._state_path(cfg.get("state_path", ""))
         self.client = None
         if self.enabled and self.api_key and self.base_url:
@@ -508,16 +509,56 @@ class DailyPortraitMaintainer:
                 "persona_events": materials.get("persona_events", []),
             },
         }
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": self._prompt()},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
-            **self._completion_options(max_tokens=self.max_tokens, temperature=self.temperature),
+        token_attempts = [self.max_tokens]
+        retry_tokens = min(max(self.max_tokens * 2, 4000), 8000)
+        if retry_tokens > self.max_tokens:
+            token_attempts.append(retry_tokens)
+        last_error: Exception | None = None
+        for index, max_tokens in enumerate(token_attempts):
+            response = await self._create_patch_completion(payload, max_tokens=max_tokens)
+            choice = response.choices[0] if response.choices else None
+            raw = choice.message.content if choice and choice.message else "{}"
+            finish_reason = str(getattr(choice, "finish_reason", "") or "")
+            try:
+                return self._parse_json_object(raw or "{}")
+            except ValueError as exc:
+                last_error = exc
+                logger.warning(
+                    "Portrait JSON parse failed on attempt %s/%s, finish_reason=%s, raw_chars=%s",
+                    index + 1,
+                    len(token_attempts),
+                    finish_reason or "unknown",
+                    len(str(raw or "")),
+                )
+                if index + 1 >= len(token_attempts):
+                    raise
+        raise last_error or ValueError("portrait_json_parse_failed")
+
+    async def _create_patch_completion(self, payload: dict, *, max_tokens: int):
+        messages = [
+            {"role": "system", "content": self._prompt()},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ]
+        options = self._completion_options(
+            max_tokens=max_tokens,
+            temperature=self.temperature,
+            json_response=self.json_response_format,
         )
-        raw = response.choices[0].message.content if response.choices else "{}"
-        return self._parse_json_object(raw or "{}")
+        try:
+            return await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                **options,
+            )
+        except Exception as exc:
+            if not options.pop("response_format", None):
+                raise
+            logger.warning("Portrait JSON response_format failed, retrying without it: %s", exc)
+            return await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                **options,
+            )
 
     def _fallback_patch(self, materials: dict, *, initial: bool) -> dict:
         add_recent = []
@@ -780,10 +821,10 @@ class DailyPortraitMaintainer:
         user_name = str(self.identity.get("user_display_name") or "用户")
         ai_name = str(self.identity.get("ai_name") or "AI")
         if scope == "user":
-            if re.search(r"(熬夜|凌晨|很晚|睡觉|工作|调试|修复|测试|部署|Ombre|Haven-voice|bug)", joined, re.IGNORECASE):
-                return self._clip(f"{user_name}近期高强度推进 Ombre/Haven 相关调试，关注修复是否真实接入并生效。", 120)
             if re.search(r"(时间|时间戳|证据|准确|精度|边界|画像|handoff|换窗)", joined, re.IGNORECASE):
                 return self._clip(f"{user_name}近期很在意记忆与画像的证据边界，倾向把换窗上下文压成准确、可追溯的核心状态。", 120)
+            if re.search(r"(熬夜|凌晨|很晚|睡觉|工作|调试|修复|测试|部署|Ombre|Haven-voice|bug)", joined, re.IGNORECASE):
+                return self._clip(f"{user_name}近期高强度推进 Ombre/Haven 相关调试，关注修复是否真实接入并生效。", 120)
             return self._clip(f"{user_name}近期的注意力集中在证据化记忆和换窗连续性上，会主动校准模糊或失真的描述。", 120)
         if scope == "relationship":
             if re.search(r"(暗房|安全|边界|门口|不自动读取|私有)", joined, re.IGNORECASE):
@@ -1601,6 +1642,9 @@ class DailyPortraitMaintainer:
     def _fallback_scope(self, bucket_payload: dict) -> str:
         tags = {str(tag).lower() for tag in bucket_payload.get("tags", []) or []}
         domains = {str(item).lower() for item in bucket_payload.get("domain", []) or []}
+        text = self._clean_fallback_text(
+            str(bucket_payload.get("source_excerpt") or bucket_payload.get("text") or "")
+        )
         if "profile_fact" in tags or bucket_payload.get("profile_kind"):
             return "user"
         if {"relationship_weather", "daily_impression", "weekly_impression"} & tags:
@@ -1609,6 +1653,15 @@ class DailyPortraitMaintainer:
             return "persona"
         if bucket_payload.get("anchor") or "恋爱" in domains or "relationship_event" in tags:
             return "relationship"
+        if (
+            tags & {"project_event", "work_event", "task_event"}
+            or domains & {"记忆系统", "代码", "工作", "项目", "开发", "ai", "memory"}
+            or re.search(
+                r"(小雨|她).{0,18}(正在|最近在|继续|准备|推进|调整|修改|修|部署|测试|写|搭|研究|排查|调试|做|关注|确认|在意)",
+                text,
+            )
+        ):
+            return "user"
         return ""
 
     def _fallback_initial_staging(self, bucket_payload: dict) -> bool:
@@ -1787,8 +1840,16 @@ class DailyPortraitMaintainer:
     def _prompt(self) -> str:
         return render_identity_template(PORTRAIT_PROMPT_TEMPLATE, self.identity)
 
-    def _completion_options(self, *, max_tokens: int, temperature: float) -> dict[str, Any]:
+    def _completion_options(
+        self,
+        *,
+        max_tokens: int,
+        temperature: float,
+        json_response: bool = False,
+    ) -> dict[str, Any]:
         options: dict[str, Any] = {"max_tokens": max_tokens, "temperature": temperature}
+        if json_response:
+            options["response_format"] = {"type": "json_object"}
         if self.thinking_mode:
             options["extra_body"] = {"thinking": {"type": self.thinking_mode}}
         return options
@@ -1797,11 +1858,11 @@ class DailyPortraitMaintainer:
         text = str(raw or "").strip()
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if match:
-            text = match.group(0)
+        start = text.find("{")
+        if start >= 0:
+            text = text[start:]
         try:
-            parsed = json.loads(text)
+            parsed, _ = json.JSONDecoder().raw_decode(text)
         except json.JSONDecodeError:
             logger.warning("Portrait JSON parse failed: %s", str(raw)[:200])
             raise ValueError("portrait_json_parse_failed")

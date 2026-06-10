@@ -549,7 +549,8 @@ portrait:
   # api_key: ""                     # OMBRE_PORTRAIT_API_KEY overrides
   thinking_mode: ""
   temperature: 0.1
-  max_tokens: 1800
+  max_tokens: 3200
+  json_response_format: true
   material_limit: 18
   first_run_material_limit: 160
   source_excerpt_chars: 900
