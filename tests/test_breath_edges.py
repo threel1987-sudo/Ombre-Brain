@@ -2408,6 +2408,51 @@ async def test_handoff_omits_persona_section_when_portrait_persona_empty(patch_b
 
 
 @pytest.mark.asyncio
+async def test_handoff_recent_continuity_trims_whole_lines(patch_breath, monkeypatch):
+    import server
+
+    lines = [
+        f"- 2026-06-10 / doing: {'交接内容' * 36} (bucket_id:complete_0{index})"
+        for index in range(1, 6)
+    ]
+    bucket_mgr = patch_breath([], token_counter=lambda text: len(str(text)))
+
+    monkeypatch.setattr(
+        server,
+        "portrait_engine",
+        SimpleNamespace(
+            state_path="state/portrait_state.json",
+            build_handoff_sections=lambda max_recent_items=4: {
+                "user": "",
+                "persona": "",
+                "relationship": "",
+                "recent_continuity": "\n".join(lines),
+                "state_path": "state/portrait_state.json",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "persona_engine",
+        SimpleNamespace(
+            get_current_state=lambda session_id: {"session_id": session_id},
+            format_state_block=lambda state: "",
+            _list_events=lambda limit: [],
+        ),
+    )
+
+    result = await server.breath(is_session_start=True, max_tokens=1600)
+
+    recent_section = result.split("=== Recent Continuity ===", 1)[1].split("\n===", 1)[0].strip()
+    recent_lines = recent_section.splitlines()
+    assert len(recent_lines) == 3
+    assert recent_lines[-1].endswith("(bucket_id:complete_03)")
+    assert "complete_04" not in recent_section
+    assert all(line.endswith(")") for line in recent_lines)
+    assert bucket_mgr.touched == []
+
+
+@pytest.mark.asyncio
 async def test_breath_query_new_window_remains_normal_recall(patch_breath):
     import server
 

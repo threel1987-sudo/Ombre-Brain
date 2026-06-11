@@ -1141,7 +1141,7 @@ async def _build_handoff_breath(max_tokens: int = 1200, session_id: str = "", de
     self_anchor = _trim_text_to_token_budget(self_anchor, 220)
     user_portrait = _trim_text_to_token_budget(user_portrait, 220)
     relationship_portrait = _trim_text_to_token_budget(relationship_portrait, 240)
-    recent_continuity = _trim_text_to_token_budget(recent_continuity, 460)
+    recent_continuity = _trim_lines_to_token_budget(recent_continuity, 650)
     anchors = _trim_text_to_token_budget(anchors, 220)
 
     sections = [
@@ -3669,6 +3669,24 @@ def _trim_text_to_token_budget(text: str, token_budget: int) -> str:
         cut = max(1, int(len(trimmed) * 0.85))
         trimmed = trimmed[:cut].rstrip()
     return trimmed
+
+
+def _trim_lines_to_token_budget(text: str, token_budget: int) -> str:
+    if token_budget <= 0:
+        return ""
+    trimmed = str(text or "").strip()
+    if not trimmed or count_tokens_approx(trimmed) <= token_budget:
+        return trimmed
+    kept: list[str] = []
+    for line in trimmed.splitlines():
+        line = line.rstrip()
+        if not line.strip():
+            continue
+        candidate = "\n".join([*kept, line])
+        if count_tokens_approx(candidate) > token_budget:
+            break
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def _normalize_direct_render_mode(value: object) -> str:
