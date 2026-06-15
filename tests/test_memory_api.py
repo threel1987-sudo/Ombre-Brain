@@ -2772,6 +2772,91 @@ async def test_breath_whisper_reads_only_whisper_feels(monkeypatch, bucket_mgr, 
 
 
 @pytest.mark.asyncio
+async def test_breath_date_reads_event_date_and_created_without_separate_params(monkeypatch, bucket_mgr, decay_eng):
+    import server
+
+    event_id = await bucket_mgr.create(
+        content="六月五日事件日期记忆：小雨和 Haven 讨论求职投递。",
+        name="六月五日事件",
+        tags=["求职"],
+        created="2026-06-15T09:00:00+08:00",
+        date="2026-06-05",
+    )
+    created_id = await bucket_mgr.create(
+        content="六月五日创建日期记忆：没有事件日期，只能看创建时间。",
+        name="六月五日创建",
+        created="2026-06-05T10:00:00+08:00",
+    )
+    authoritative_id = await bucket_mgr.create(
+        content="这条创建于六月五日，但事件日期是三月一日。",
+        name="事件日期优先",
+        created="2026-06-05T11:00:00+08:00",
+        date="2026-03-01",
+    )
+    daily_id = await bucket_mgr.create(
+        content="这是一条六月五日的日印象，不该混进普通日期读取。",
+        name="六月五日日印象",
+        tags=["relationship_weather", "daily_impression"],
+        bucket_type="feel",
+        created="2026-06-05T23:59:00+08:00",
+        period="daily",
+        date="2026-06-05",
+    )
+
+    monkeypatch.setattr(server, "bucket_mgr", bucket_mgr)
+    monkeypatch.setattr(server, "decay_engine", decay_eng)
+
+    dotted = await server.breath(date="2026.06.05", max_results=10, max_tokens=2000)
+    hyphen_query = await server.breath(query="2026-06-05聊了什么", max_results=10, max_tokens=2000)
+    daily = await server.breath(domain="daily_impression", date="2026-06-05")
+
+    for result in (dotted, hyphen_query):
+        assert "=== 日期记忆 2026-06-05" in result
+        assert f"[bucket_id:{event_id}]" in result
+        assert f"[bucket_id:{created_id}]" in result
+        assert f"[bucket_id:{authoritative_id}]" not in result
+        assert f"[bucket_id:{daily_id}]" not in result
+    assert f"[bucket_id:{daily_id}]" in daily
+
+
+@pytest.mark.asyncio
+async def test_breath_date_accepts_short_year_and_month_day_default_year(monkeypatch, bucket_mgr, decay_eng):
+    import server
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    current_year = datetime.now(ZoneInfo("Asia/Shanghai")).year
+    short_year_id = await bucket_mgr.create(
+        content="青梅档案在二五年六月十五日被记住。",
+        name="青梅档案",
+        created="2025-06-16T09:00:00+08:00",
+        date="2025-06-15",
+    )
+    current_year_id = await bucket_mgr.create(
+        content="今年默认档案在本年六月十五日被记住。",
+        name="今年默认档案",
+        created=f"{current_year}-06-15T09:00:00+08:00",
+        date=f"{current_year}-06-15",
+    )
+    old_year_id = await bucket_mgr.create(
+        content="旧年默认档案不该被无年份月日查到。",
+        name="旧年默认档案",
+        created=f"{current_year - 1}-06-15T09:00:00+08:00",
+        date=f"{current_year - 1}-06-15",
+    )
+
+    monkeypatch.setattr(server, "bucket_mgr", bucket_mgr)
+    monkeypatch.setattr(server, "decay_engine", decay_eng)
+
+    short_year = await server.breath(query="25年6月15日聊青梅档案", max_results=10, max_tokens=2000)
+    month_day = await server.breath(query="6月15日聊今年默认档案", max_results=10, max_tokens=2000)
+
+    assert f"[bucket_id:{short_year_id}]" in short_year
+    assert f"[bucket_id:{current_year_id}]" in month_day
+    assert f"[bucket_id:{old_year_id}]" not in month_day
+
+
+@pytest.mark.asyncio
 async def test_hold_returns_readonly_related_memory_without_merging(monkeypatch, bucket_mgr, decay_eng):
     import server
 

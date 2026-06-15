@@ -4917,6 +4917,89 @@ def test_gateway_date_recall_treats_event_date_as_authoritative(
     assert "蓝雨档案记录的是三月一日" not in injected
 
 
+def test_gateway_date_recall_accepts_human_date_formats(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    current_year = datetime.now(timezone(timedelta(hours=8))).year
+    cfg = _gateway_config(
+        test_config,
+        recent_context_budget=0,
+        recalled_memory_budget=500,
+        related_memory_budget=0,
+        inject_total_budget=1800,
+        current_inner_state_interval_rounds=0,
+        relationship_weather_interval_rounds=0,
+        favorite_memory_interval_rounds=0,
+        date_recall_enabled=True,
+        date_recall_budget=500,
+        date_recall_max_turns=2,
+        date_recall_max_buckets=3,
+    )
+    dotted_id = _create_bucket(
+        bucket_mgr,
+        content="点号日期档案记录 2026.06.15 那天的蓝雨讨论。",
+        name="点号日期档案",
+        hours_ago=1,
+        date="2026-06-15",
+    )
+    short_year_id = _create_bucket(
+        bucket_mgr,
+        content="青梅档案记录二五年六月十五日的聊天。",
+        name="青梅档案",
+        hours_ago=1,
+        date="2025-06-15",
+    )
+    month_day_id = _create_bucket(
+        bucket_mgr,
+        content="今年默认档案记录本年六月十五日的聊天。",
+        name="今年默认档案",
+        hours_ago=1,
+        date=f"{current_year}-06-15",
+    )
+    old_year_id = _create_bucket(
+        bucket_mgr,
+        content="旧年默认档案不该被无年份月日查到。",
+        name="旧年默认档案",
+        hours_ago=1,
+        date=f"{current_year - 1}-06-15",
+    )
+    _, service, state_store, _ = _build_service(monkeypatch, cfg, bucket_mgr, embedding_results=[])
+    state_store.record_success("sess-human-date-formats", [], completed_at=datetime.now() - timedelta(minutes=5))
+
+    dotted_payload, dotted_ids, dotted_debug = _run(
+        service.prepare_payload(
+            {"messages": [{"role": "user", "content": "2026.06.15聊点号日期档案吗"}]},
+            "sess-human-date-formats",
+            include_debug=True,
+        )
+    )
+    short_payload, short_ids, short_debug = _run(
+        service.prepare_payload(
+            {"messages": [{"role": "user", "content": "25年6月15日聊青梅档案吗"}]},
+            "sess-human-date-formats",
+            include_debug=True,
+        )
+    )
+    month_payload, month_ids, month_debug = _run(
+        service.prepare_payload(
+            {"messages": [{"role": "user", "content": "6月15日聊今年默认档案吗"}]},
+            "sess-human-date-formats",
+            include_debug=True,
+        )
+    )
+
+    assert dotted_ids == [dotted_id]
+    assert "点号日期档案" in _joined_message_content(dotted_payload["messages"])
+    assert dotted_debug["date_recall_debug"]["date"] == "2026-06-15"
+    assert short_ids == [short_year_id]
+    assert short_debug["date_recall_debug"]["date"] == "2025-06-15"
+    assert month_ids == [month_day_id]
+    assert month_debug["date_recall_debug"]["date"] == f"{current_year}-06-15"
+    assert f"[bucket_id:{old_year_id}]" not in _joined_message_content(month_payload["messages"])
+
+
 def test_gateway_date_recall_handles_plain_yesterday_chat_question(
     monkeypatch,
     test_config,

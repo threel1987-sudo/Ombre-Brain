@@ -78,8 +78,11 @@ from source_refs import source_ref_window
 from utils import (
     count_tokens_approx,
     bucket_text_for_embedding,
+    local_date_key,
     load_config,
+    parse_human_date_reference,
     setup_logging,
+    strip_human_date_references,
     strip_display_temperature_sections,
     strip_temperature_meaning_lines,
     strip_wikilinks,
@@ -4526,31 +4529,7 @@ class GatewayService:
         text = str(query or "").strip()
         if not text:
             return None
-        now = datetime.now(self.gateway_tz)
-        explicit = re.search(r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?", text)
-        if explicit:
-            year, month, day = (int(part) for part in explicit.groups())
-            try:
-                target = datetime(year, month, day, tzinfo=self.gateway_tz).date()
-            except ValueError:
-                return None
-            return {"date": target.isoformat(), "label": target.isoformat()}
-        relative_days = [
-            ("大前天", -3),
-            ("前天", -2),
-            ("昨晚", -1),
-            ("昨天", -1),
-            ("昨日", -1),
-            ("今晚", 0),
-            ("今天", 0),
-        ]
-        for label, offset in relative_days:
-            if label in text:
-                return {
-                    "date": (now + timedelta(days=offset)).date().isoformat(),
-                    "label": label,
-                }
-        return None
+        return parse_human_date_reference(text, now=datetime.now(self.gateway_tz), tz=self.gateway_tz)
 
     def _date_recall_range(self, date_key: str) -> tuple[datetime, datetime]:
         target = datetime.fromisoformat(f"{date_key}T00:00:00").replace(tzinfo=self.gateway_tz)
@@ -4572,8 +4551,7 @@ class GatewayService:
         return self._dedupe_date_recall_topic_terms(terms)
 
     def _strip_date_recall_query_shell(self, query: str) -> str:
-        text = str(query or "")
-        text = re.sub(r"20\d{2}[-/.年]\d{1,2}[-/.月]\d{1,2}日?", " ", text)
+        text = strip_human_date_references(query)
         shell_terms = {
             "大前天", "前天", "昨晚", "昨天", "昨日", "今晚", "今天",
             "我们", "咱们", "哥哥", "宝宝", "老婆", "我", "你",
@@ -4662,19 +4640,7 @@ class GatewayService:
         return date_value, importance
 
     def _local_date_key(self, value: Any) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
-            return text
-        try:
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except ValueError:
-            match = re.match(r"^\d{4}-\d{2}-\d{2}", text)
-            return match.group(0) if match else ""
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(self.gateway_tz)
-        return parsed.date().isoformat()
+        return local_date_key(value, tz=self.gateway_tz)
 
     def _build_just_now_chat_context(self, query_text: str) -> tuple[str, dict[str, Any]]:
         debug = self._just_now_context_debug_base(query_text)
