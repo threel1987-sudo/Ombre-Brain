@@ -7516,6 +7516,64 @@ def test_date_persona_trace_skips_plain_today_status_query(monkeypatch, test_con
     assert debug["date_persona_trace_debug"]["skip_reason"] == "no_date_hint"
 
 
+def test_date_persona_trace_skips_plain_yesterday_statement_even_with_material(
+    monkeypatch, test_config, bucket_mgr
+):
+    target = datetime.now(timezone(timedelta(hours=8))) - timedelta(days=1)
+    date_key = target.date().isoformat()
+    _create_bucket(
+        bucket_mgr,
+        content="昨天的日印象：小雨晚上睡得很晚，但整体只是普通生活状态。",
+        name="昨日日印象",
+        bucket_type="feel",
+        tags=["relationship_weather", "daily_impression"],
+        hours_ago=24,
+        date=date_key,
+    )
+    cfg = _gateway_config(
+        test_config,
+        recent_context_budget=0,
+        recalled_memory_budget=0,
+        related_memory_budget=0,
+        current_inner_state_interval_rounds=0,
+        relationship_weather_interval_rounds=0,
+        date_persona_trace_enabled=True,
+        date_persona_trace_budget=260,
+        date_persona_trace_max_events=2,
+    )
+    _, service, _, _ = _build_service(monkeypatch, cfg, bucket_mgr)
+
+    class DatePersona(DummyPersonaEngine):
+        def _list_events(self, limit: int, session_id: str | None = None) -> list[dict]:
+            return [
+                {
+                    "id": 18,
+                    "event_type": "state",
+                    "inner_thought": "这条存在但不该被普通昨天句子触发。",
+                    "created_at": f"{date_key}T23:40:00+08:00",
+                }
+            ][:limit]
+
+    service.persona_engine = DatePersona()
+
+    payload, recalled_ids, debug = _run(
+        service.prepare_payload(
+            {"messages": [{"role": "user", "content": "昨天我睡得很晚"}]},
+            "sess-date-trace-plain-yesterday",
+            include_debug=True,
+        )
+    )
+    injected = _joined_message_content(payload["messages"])
+
+    assert recalled_ids == []
+    assert debug["date_recall_injected"] is False
+    assert "Date Persona Trace" not in injected
+    assert "昨天的日印象" not in injected
+    assert "这条存在但不该被普通昨天句子触发" not in injected
+    assert debug["date_persona_trace_injected"] is False
+    assert debug["date_persona_trace_debug"]["skip_reason"] == "date_trace_not_requested"
+
+
 def test_recent_round_skip_prefers_unseen_candidate(monkeypatch, test_config, bucket_mgr):
     cfg = _gateway_config(
         test_config,

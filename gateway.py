@@ -1537,11 +1537,21 @@ class GatewayService:
                 self.recalled_budget,
                 current_user_query,
             )
+            date_persona_trace_requested = (
+                date_recall_requested
+                or self._query_requests_date_persona_trace(current_user_query)
+            )
             if needs_handoff_first or just_now_context_requested:
                 date_persona_trace_debug["skip_reason"] = (
                     "just_now_context"
                     if just_now_context_requested and not needs_handoff_first
                     else ("handoff_trigger" if is_handoff_trigger_query else "session_start_handoff")
+                )
+            elif not date_persona_trace_requested:
+                date_persona_trace_debug["skip_reason"] = (
+                    "no_date_hint"
+                    if not self._query_date_hint(current_user_query)
+                    else "date_trace_not_requested"
                 )
             else:
                 date_persona_trace, date_persona_trace_debug = self._build_date_persona_trace_block(
@@ -4801,6 +4811,38 @@ class GatewayService:
             "这次",
         )
         return any(marker in text for marker in detail_markers)
+
+    def _query_requests_date_persona_trace(self, query: str) -> bool:
+        text = str(query or "").strip()
+        if not text or not self._query_date_hint(text):
+            return False
+        if self._query_requests_just_now_context(text):
+            return False
+        trace_markers = (
+            "记得",
+            "记不记得",
+            "还记得",
+            "想起",
+            "想起来",
+            "为什么",
+            "怎么说",
+            "怎么回事",
+            "怎么了",
+            "确认",
+            "当时",
+            "那次",
+            "这次",
+            "的事",
+            "什么事",
+            "发生",
+            "聊",
+            "说",
+            "提",
+            "讲",
+            "讨论",
+            "做了什么",
+        )
+        return any(marker in text for marker in trace_markers)
 
     def _build_date_persona_trace_block(
         self,
