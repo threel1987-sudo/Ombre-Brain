@@ -8566,6 +8566,8 @@ class GatewayService:
             return ""
         compact_len = len(re.sub(r"\s+", "", text))
         long_enough = compact_len >= self.query_planner_min_chars
+        if self._query_looks_operational_task_without_recall(text):
+            return ""
         multi_topic = self._query_looks_multi_topic(text)
         if multi_topic:
             return "multi_topic"
@@ -8574,6 +8576,61 @@ class GatewayService:
         if not selected_items and long_enough:
             return "direct_recall_empty_or_low_confidence"
         return ""
+
+    def _query_looks_operational_task_without_recall(self, query: str) -> bool:
+        text = str(query or "").strip().lower()
+        if not text:
+            return False
+        recall_markers = (
+            "记得",
+            "记忆",
+            "召回",
+            "检索",
+            "想起",
+            "回忆",
+            "之前",
+            "上次",
+            "为什么",
+            "原因",
+            "remember",
+            "recall",
+            "memory",
+            "search",
+            "why",
+        )
+        if any(marker in text for marker in recall_markers):
+            return False
+        task_markers = (
+            "直接用",
+            "新建",
+            "直接改",
+            "改一下",
+            "修改",
+            "修一下",
+            "修复",
+            "加一下",
+            "删掉",
+            "删除",
+            "部署",
+            "推一下",
+            "跑一下",
+            "运行",
+            "模板",
+            "工作流",
+            "代码",
+            "文件",
+            "配置",
+            "脚本",
+            "commit",
+            "push",
+            "deploy",
+            "run",
+            "fix",
+            "use",
+            "template",
+            "workflow",
+        )
+        return any(marker in text for marker in task_markers)
 
     def _query_looks_emotional_reason_lookup(self, query: str) -> bool:
         return emotional_recall_plan(query, self.relevance_options).triggered

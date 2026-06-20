@@ -6396,6 +6396,30 @@ def test_gateway_query_planner_does_not_trigger_on_single_cry_word(monkeypatch, 
     assert service._query_planner_trigger_reason("哭", []) == ""
 
 
+def test_gateway_query_planner_skips_operational_task_without_recall(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    _, service, _, _ = _build_service(
+        monkeypatch,
+        _gateway_config(
+            test_config,
+            query_planner_enabled=True,
+            query_planner_min_chars=16,
+        ),
+        bucket_mgr,
+    )
+
+    assert (
+        service._query_planner_trigger_reason(
+            "直接用那个主动联系工作流模板搓（？）能看到那个吗？或者我先新建一个直接改？",
+            [],
+        )
+        == ""
+    )
+
+
 def test_gateway_query_planner_falls_back_when_emotional_reason_model_is_empty(
     monkeypatch,
     test_config,
