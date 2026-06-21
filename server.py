@@ -70,6 +70,7 @@ from darkroom import DarkroomStore
 from dream_engine import DreamEngine
 from embedding_engine import EmbeddingEngine
 from favorite_tags import has_favorite_memory_tag, has_favorite_policy_tag
+from gateway_state import GatewayStateStore
 from identity import identity_names
 from identity_semantics import IdentitySemanticStore
 from import_memory import ImportEngine
@@ -116,6 +117,7 @@ from memory_nodes import MemoryNodeStore
 from persona_engine import PersonaStateEngine
 from persona_event_selection import select_persona_events
 from portrait_engine import DailyPortraitMaintainer
+from raw_events import RawEventStore
 from reflection_engine import ReflectionEngine
 from recall_diagnostics import RecallDiagnosticsLogger
 from reranker_engine import RerankerEngine
@@ -164,6 +166,8 @@ dream_engine = DreamEngine(config)                     # Night dream worker / �
 identity_semantic_store = IdentitySemanticStore(config) # Private relationship alias index / 私有关系语义索引
 word_map_store = WordMapStore(config)                   # Derived generic word co-occurrence index / 派生通用词图
 darkroom_store = DarkroomStore(config)                  # Private reflection room / 不回显正文的暗房
+gateway_state_store = GatewayStateStore(os.path.join(config["buckets_dir"], "gateway_state.db"))
+raw_event_store = RawEventStore(config)                  # Raw dialogue archive / 原文保险箱
 
 # --- Create MCP server instance / 创建 MCP 服务器实例 ---
 # host="0.0.0.0" so Docker container's SSE is externally reachable
@@ -8102,6 +8106,7 @@ async def reflect(period: str = "daily", force: bool = False) -> dict:
         persona_engine=persona_engine,
         embedding_engine=embedding_engine,
         force=force,
+        conversation_turn_store=gateway_state_store,
     )
 
 
@@ -9157,6 +9162,95 @@ async def api_search(request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def _raw_ingest_events_from_body(body: dict) -> list[dict]:
+    if not isinstance(body, dict):
+        return []
+    if isinstance(body.get("events"), list):
+        events = [item for item in body.get("events", []) if isinstance(item, dict)]
+    elif isinstance(body.get("event"), dict):
+        events = [body["event"]]
+    elif any(key in body for key in ("role", "text", "content")):
+        events = [body]
+    else:
+        events = []
+
+    common = {
+        "source": body.get("source"),
+        "conversation_id": body.get("conversation_id"),
+        "session_id": body.get("session_id"),
+        "client": body.get("client"),
+    }
+    for event in events:
+        for key, value in common.items():
+            if value is not None and key not in event:
+                event[key] = value
+    return events
+
+
+@mcp.custom_route("/api/ingest-raw", methods=["POST"])
+async def api_ingest_raw(request):
+    """Ingest user/assistant raw dialogue events. Does not accept tools, system prompts, or memory injections."""
+    from starlette.responses import JSONResponse
+    err = _require_dashboard_auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "request body must be an object"}, status_code=400)
+
+    events = _raw_ingest_events_from_body(body)
+    if not events:
+        return JSONResponse({"error": "missing events"}, status_code=400)
+
+    try:
+        result = raw_event_store.ingest(events, source=str(body.get("source") or "raw"))
+        return JSONResponse(result)
+    except Exception as exc:
+        logger.warning("raw ingest failed: %s", exc)
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@mcp.custom_route("/api/search-raw", methods=["GET", "POST"])
+async def api_search_raw(request):
+    """Search raw dialogue events as a fallback archive. Returns only stored user/assistant originals."""
+    from starlette.responses import JSONResponse
+    err = _require_dashboard_auth(request)
+    if err:
+        return err
+
+    params = dict(getattr(request, "query_params", {}) or {})
+    body = {}
+    try:
+        parsed = await request.json()
+        if isinstance(parsed, dict):
+            body = parsed
+    except Exception:
+        body = {}
+
+    def value(name: str, default: str = ""):
+        return body.get(name, params.get(name, default))
+
+    query = str(value("q", value("query", "")) or "")
+    try:
+        result = raw_event_store.search(
+            query=query,
+            limit=_int_between(value("limit", 10), 10, 1, 100),
+            source=str(value("source", "") or ""),
+            role=str(value("role", "") or ""),
+            conversation_id=str(value("conversation_id", "") or ""),
+            session_id=str(value("session_id", "") or ""),
+            since=str(value("since", "") or ""),
+            until=str(value("until", "") or ""),
+        )
+        return JSONResponse(result)
+    except Exception as exc:
+        logger.warning("raw search failed: %s", exc)
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
 @mcp.custom_route("/api/network", methods=["GET"])
 async def api_network(request):
     """Get embedding similarity network for visualization."""
@@ -9435,6 +9529,7 @@ async def api_reflection_run(request):
             persona_engine=persona_engine,
             embedding_engine=embedding_engine,
             force=_bool_value(body.get("force"), False),
+            conversation_turn_store=gateway_state_store,
         )
         return JSONResponse(result)
     except Exception as e:
@@ -9665,6 +9760,18 @@ async def api_config_get(request):
                 reflection_cfg.get(
                     "relationship_weather_affect_anchor_enabled",
                     getattr(reflection_engine, "relationship_weather_affect_anchor_enabled", True),
+                )
+            ),
+            "daily_min_memory_items": int(
+                reflection_cfg.get(
+                    "daily_min_memory_items",
+                    getattr(reflection_engine, "daily_min_memory_items", 5),
+                )
+            ),
+            "daily_conversation_turn_limit": int(
+                reflection_cfg.get(
+                    "daily_conversation_turn_limit",
+                    getattr(reflection_engine, "daily_conversation_turn_limit", 0),
                 )
             ),
             "model": getattr(reflection_engine, "model", reflection_cfg.get("model", "")),
@@ -10077,6 +10184,22 @@ async def api_config_update(request):
             if key in r:
                 reflection_cfg[key] = str(r[key] or "").strip()
                 updated.append(f"reflection.{key}")
+        if "daily_min_memory_items" in r:
+            reflection_cfg["daily_min_memory_items"] = _int_between(
+                r.get("daily_min_memory_items"),
+                5,
+                0,
+                100,
+            )
+            updated.append("reflection.daily_min_memory_items")
+        if "daily_conversation_turn_limit" in r:
+            reflection_cfg["daily_conversation_turn_limit"] = _int_between(
+                r.get("daily_conversation_turn_limit"),
+                0,
+                0,
+                80,
+            )
+            updated.append("reflection.daily_conversation_turn_limit")
         if "api_key" in r and r["api_key"]:
             reflection_cfg["api_key"] = str(r["api_key"])
             os.environ["OMBRE_REFLECTION_API_KEY"] = reflection_cfg["api_key"]
@@ -10413,6 +10536,20 @@ async def api_config_update(request):
                 for key in ("model", "base_url"):
                     if key in body["reflection"]:
                         sc_reflection[key] = str(body["reflection"][key] or "").strip()
+                if "daily_min_memory_items" in body["reflection"]:
+                    sc_reflection["daily_min_memory_items"] = _int_between(
+                        body["reflection"].get("daily_min_memory_items"),
+                        5,
+                        0,
+                        100,
+                    )
+                if "daily_conversation_turn_limit" in body["reflection"]:
+                    sc_reflection["daily_conversation_turn_limit"] = _int_between(
+                        body["reflection"].get("daily_conversation_turn_limit"),
+                        0,
+                        0,
+                        80,
+                    )
                 # Never persist api_key to yaml (use env var)
 
             if "portrait" in body:
@@ -10767,6 +10904,7 @@ if __name__ == "__main__":
             local_persona_engine = PersonaStateEngine(config)
             local_reflection_engine = ReflectionEngine(config)
             local_memory_edge_store = MemoryEdgeStore(config)
+            local_gateway_state_store = GatewayStateStore(os.path.join(config["buckets_dir"], "gateway_state.db"))
             while True:
                 try:
                     reflection_cfg = config.get("reflection", {}) if isinstance(config.get("reflection", {}), dict) else {}
@@ -10779,10 +10917,23 @@ if __name__ == "__main__":
                     local_reflection_engine.relationship_weather_affect_anchor_enabled = bool(
                         reflection_cfg.get("relationship_weather_affect_anchor_enabled", True)
                     )
+                    local_reflection_engine.daily_min_memory_items = _int_between(
+                        reflection_cfg.get("daily_min_memory_items"),
+                        5,
+                        0,
+                        100,
+                    )
+                    local_reflection_engine.daily_conversation_turn_limit = _int_between(
+                        reflection_cfg.get("daily_conversation_turn_limit"),
+                        0,
+                        0,
+                        80,
+                    )
                     results = await local_reflection_engine.run_due(
                         local_bucket_mgr,
                         local_persona_engine,
                         local_embedding_engine,
+                        local_gateway_state_store,
                     )
                     if results:
                         logger.info("Reflection run-due results / 反思定时结果: %s", results)

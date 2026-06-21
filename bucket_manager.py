@@ -429,6 +429,10 @@ class BucketManager:
             post["source_persona_event_ids"] = (
                 kwargs["source_persona_event_ids"] if isinstance(kwargs["source_persona_event_ids"], list) else []
             )
+        if "source_conversation_turn_ids" in kwargs:
+            post["source_conversation_turn_ids"] = (
+                kwargs["source_conversation_turn_ids"] if isinstance(kwargs["source_conversation_turn_ids"], list) else []
+            )
         if "extra_metadata" in kwargs and isinstance(kwargs["extra_metadata"], dict):
             reserved = {"id", "name", "content", "created", "last_active", "updated_at"}
             for key, value in kwargs["extra_metadata"].items():

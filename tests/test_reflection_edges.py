@@ -688,6 +688,22 @@ async def test_reflect_daily_requires_five_memory_or_update_items(test_config):
 
 
 @pytest.mark.asyncio
+async def test_reflect_daily_uses_configured_min_memory_items(test_config):
+    cfg = _no_api_config(test_config)
+    cfg["reflection"]["daily_min_memory_items"] = 3
+    bucket_mgr = BucketManager(cfg)
+    engine = ReflectionEngine(cfg)
+    await _create_daily_memories(bucket_mgr, count=3)
+    now = datetime(2026, 5, 21, 20, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    result = await engine.reflect("daily", bucket_mgr, force=True, now=now)
+
+    assert result["status"] == "created"
+    assert result["materials"]["buckets"] == 3
+    assert result["materials"]["min_buckets"] == 3
+
+
+@pytest.mark.asyncio
 async def test_reflect_daily_persona_events_do_not_count_toward_minimum(test_config):
     cfg = _no_api_config(test_config)
     cfg["reflection"]["persona_events_limit"] = 1
@@ -729,6 +745,77 @@ async def test_reflect_daily_persona_events_do_not_count_toward_minimum(test_con
     assert result["reason"] == "insufficient_daily_memory"
     assert result["materials"]["buckets"] == 4
     assert result["materials"]["persona_events"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reflect_daily_conversation_turns_replace_persona_events_material(test_config):
+    cfg = _no_api_config(test_config)
+    cfg["reflection"]["daily_conversation_turn_limit"] = 2
+    cfg["reflection"]["persona_events_limit"] = 2
+    bucket_mgr = BucketManager(cfg)
+    engine = ReflectionEngine(cfg)
+    await _create_daily_memories(bucket_mgr, count=5)
+    now = datetime(2026, 5, 21, 20, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    class ConversationTurnStore:
+        def list_conversation_turns_between(self, *, profile_id, start_at, end_at, limit):
+            return [
+                {
+                    "id": 3,
+                    "session_id": "daily-window",
+                    "round_id": 3,
+                    "created_at": "2026-05-21T21:00:00+08:00",
+                    "user_text": "晚上补一句原文。",
+                    "assistant_text": "我听见了。",
+                },
+                {
+                    "id": 2,
+                    "session_id": "daily-window",
+                    "round_id": 2,
+                    "created_at": "2026-05-21T12:00:00+08:00",
+                    "user_text": "中午这轮也要看。",
+                    "assistant_text": "会放进日印象材料。",
+                },
+                {
+                    "id": 1,
+                    "session_id": "daily-window",
+                    "round_id": 1,
+                    "created_at": "2026-05-21T08:00:00+08:00",
+                    "user_text": "早上第一轮。",
+                    "assistant_text": "太早会被 limit 挤掉。",
+                },
+            ]
+
+    class PersonaEvents:
+        profile_id = "haven_xiaoyu"
+
+        def _list_events(self, limit: int) -> list[dict]:
+            return [
+                {
+                    "id": 10,
+                    "mood_label": "soft",
+                    "surface_trigger": "小雨说今天记得她",
+                    "relationship_event": True,
+                    "confidence": 0.8,
+                    "created_at": "2026-05-21T18:00:00+08:00",
+                }
+            ]
+
+    result = await engine.reflect(
+        "daily",
+        bucket_mgr,
+        persona_engine=PersonaEvents(),
+        force=True,
+        now=now,
+        conversation_turn_store=ConversationTurnStore(),
+    )
+    bucket = await bucket_mgr.get(result["id"])
+
+    assert result["status"] == "created"
+    assert result["materials"]["conversation_turns"] == 2
+    assert result["materials"]["persona_events"] == 0
+    assert bucket["metadata"]["source_conversation_turn_ids"] == [2, 3]
+    assert bucket["metadata"]["source_persona_event_ids"] == []
 
 
 @pytest.mark.asyncio

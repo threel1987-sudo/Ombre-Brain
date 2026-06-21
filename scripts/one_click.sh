@@ -480,6 +480,10 @@ word_map:
   weak_hint_terms: []
   weak_hint_weight: 0.25
 
+raw_events:
+  db_path: ""
+  max_ingest_batch: 1000
+
 identity_semantics:
   enabled: false
   private_config_path: ""
@@ -620,6 +624,8 @@ reflection:
   thinking_mode: ""
   timezone: "Asia/Shanghai"
   daily_hour: 4
+  daily_min_memory_items: 5
+  daily_conversation_turn_limit: 0
   check_interval_minutes: 60
 
 dream:

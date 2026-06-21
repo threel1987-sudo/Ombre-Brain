@@ -226,6 +226,13 @@ word_map:
   private_terms: []                   # Deployment-private terms to exclude from generic Word Map
   stopword_prefixes: []               # Extra prefixes such as custom_ / 额外前缀
   overview_stopwords: []              # Extra terms hidden from Top Nodes/Edges only; cards and recall hints are unaffected
+
+# --- Raw Events Archive / 原文保险箱 ---
+# Stores only original user/assistant text pushed through /api/ingest-raw.
+# Does not replace curated Ombre buckets or short-term Gateway conversation_turns.
+raw_events:
+  db_path: ""                          # empty = state_dir/raw_events.sqlite
+  max_ingest_batch: 1000
   overview_stopword_prefixes: []      # Extra prefixes hidden from Top Nodes/Edges only
   overview_aliases: {}                # Display-only canonical aliases, e.g. {"darkroom": "暗房"}
   overview_priority_terms: []         # Extra terms to boost in Top Nodes, without changing recall
@@ -546,6 +553,8 @@ reflection:
   max_tokens: 700
   timezone: "Asia/Shanghai"
   daily_hour: 4                   # generate daily impression after this local hour
+  daily_min_memory_items: 5        # ordinary memory/update items required before daily impression writes
+  daily_conversation_turn_limit: 0 # 0 = do not include short-term conversation_turns in daily impression material
   persona_events_limit: 12         # selected and deduped; persona events supplement daily weather only
   persona_events_scan_limit: 80
   weekly_enabled: false            # weekly impressions are off by default; daily impressions remain

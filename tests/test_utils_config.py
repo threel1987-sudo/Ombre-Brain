@@ -15,10 +15,14 @@ def test_load_config_defaults_relationship_weather_off(tmp_path):
     assert config["write_path"]["semantic_search_timeout_seconds"] == 3
     assert config["memory_write_gate"]["auto_sources"] == ["operit", "workflow", "worker", "auto"]
     assert config["memory_write_gate"]["repeat_promote_count"] == 2
+    assert config["raw_events"]["db_path"] == ""
+    assert config["raw_events"]["max_ingest_batch"] == 1000
     assert config["reflection"]["enrich_backfill_enabled"] is True
     assert config["reflection"]["enrich_backfill_limit"] == 5
     assert config["reflection"]["edge_backfill_limit"] == 5
     assert config["reflection"]["daily_enabled"] is True
+    assert config["reflection"]["daily_min_memory_items"] == 5
+    assert config["reflection"]["daily_conversation_turn_limit"] == 0
     assert config["reflection"]["memory_affect_anchor_enabled"] is True
     assert config["reflection"]["relationship_weather_affect_anchor_enabled"] is True
     assert config["portrait"]["enabled"] is True

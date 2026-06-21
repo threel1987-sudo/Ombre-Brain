@@ -3436,6 +3436,8 @@ async def test_config_get_reports_reflection_affect_anchor_switches(monkeypatch)
                 "daily_enabled": False,
                 "memory_affect_anchor_enabled": False,
                 "relationship_weather_affect_anchor_enabled": True,
+                "daily_min_memory_items": 7,
+                "daily_conversation_turn_limit": 12,
             },
         },
     )
@@ -3446,6 +3448,8 @@ async def test_config_get_reports_reflection_affect_anchor_switches(monkeypatch)
     assert payload["reflection"]["memory_affect_anchor_enabled"] is False
     assert payload["reflection"]["relationship_weather_affect_anchor_enabled"] is True
     assert payload["reflection"]["daily_enabled"] is False
+    assert payload["reflection"]["daily_min_memory_items"] == 7
+    assert payload["reflection"]["daily_conversation_turn_limit"] == 12
 
 
 @pytest.mark.asyncio
@@ -3882,6 +3886,8 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
                     "enabled": False,
                     "auto_enabled": False,
                     "daily_enabled": True,
+                    "daily_min_memory_items": 8,
+                    "daily_conversation_turn_limit": 16,
                     "memory_affect_anchor_enabled": False,
                     "relationship_weather_affect_anchor_enabled": True,
                     "model": "reflection-new",
@@ -4016,6 +4022,8 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
     assert "gateway_restart_required_for_memory_diffusion" not in payload["updated"]
     assert "gateway_hot_reloaded" in payload["updated"]
     assert runtime_config["reflection"]["daily_enabled"] is True
+    assert runtime_config["reflection"]["daily_min_memory_items"] == 8
+    assert runtime_config["reflection"]["daily_conversation_turn_limit"] == 16
     assert runtime_config["reflection"]["enabled"] is False
     assert runtime_config["reflection"]["auto_enabled"] is False
     assert runtime_config["reflection"]["memory_affect_anchor_enabled"] is False

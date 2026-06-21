@@ -212,6 +212,10 @@ def load_config(config_path: str = None) -> dict:
             "private_terms": [],
             "stopword_prefixes": [],
         },
+        "raw_events": {
+            "db_path": "",
+            "max_ingest_batch": 1000,
+        },
         "identity_semantics": {
             "enabled": False,
             "private_config_path": "",
@@ -373,6 +377,8 @@ def load_config(config_path: str = None) -> dict:
             "max_tokens": 700,
             "timezone": "Asia/Shanghai",
             "daily_hour": 4,
+            "daily_min_memory_items": 5,
+            "daily_conversation_turn_limit": 0,
             "weekly_day": 0,
             "weekly_hour": 4,
             "check_interval_minutes": 60,

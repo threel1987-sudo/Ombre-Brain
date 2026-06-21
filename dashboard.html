@@ -2790,6 +2790,16 @@
       </div>
       <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">关闭后不再自动生成 daily relationship_weather</div>
       <div class="config-row">
+        <label>最少记忆数</label>
+        <input type="number" id="cfg-reflection-daily-min-memory" min="0" max="100" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 5；只数当天普通记忆/更新项，persona events 不计入门槛</div>
+      <div class="config-row">
+        <label>读取对话轮次</label>
+        <input type="number" id="cfg-reflection-daily-turns" min="0" max="80" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 0；大于 0 时读取当天短期对话原文作为日印象材料</div>
+      <div class="config-row">
         <label>普通记忆和弦</label>
         <select id="cfg-reflection-memory-anchor"><option value="true">开启</option><option value="false">关闭</option></select>
       </div>
@@ -6044,6 +6054,10 @@ async function loadConfig() {
       (cfg.reflection && cfg.reflection.auto_enabled) === false ? 'false' : 'true';
     document.getElementById('cfg-reflection-daily').value =
       (cfg.reflection && cfg.reflection.daily_enabled) === false ? 'false' : 'true';
+    document.getElementById('cfg-reflection-daily-min-memory').value =
+      (cfg.reflection && cfg.reflection.daily_min_memory_items) ?? 5;
+    document.getElementById('cfg-reflection-daily-turns').value =
+      (cfg.reflection && cfg.reflection.daily_conversation_turn_limit) ?? 0;
     document.getElementById('cfg-reflection-memory-anchor').value =
       (cfg.reflection && cfg.reflection.memory_affect_anchor_enabled) === false ? 'false' : 'true';
     document.getElementById('cfg-reflection-weather-anchor').value =
@@ -6176,6 +6190,8 @@ async function saveConfig(persist, persistEnv) {
       enabled: document.getElementById('cfg-reflection-enabled').value === 'true',
       auto_enabled: document.getElementById('cfg-reflection-auto').value === 'true',
       daily_enabled: document.getElementById('cfg-reflection-daily').value === 'true',
+      daily_min_memory_items: numberValue('cfg-reflection-daily-min-memory', 5),
+      daily_conversation_turn_limit: numberValue('cfg-reflection-daily-turns', 0),
       memory_affect_anchor_enabled: document.getElementById('cfg-reflection-memory-anchor').value === 'true',
       relationship_weather_affect_anchor_enabled: document.getElementById('cfg-reflection-weather-anchor').value === 'true',
       model: document.getElementById('cfg-reflection-model').value,

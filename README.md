@@ -1,6 +1,6 @@
 # Ombre Brain - Haven/Rain Fork
 
-这是 [P0luz/Ombre-Brain](https://github.com/P0luz/Ombre-Brain) 的二次开发版本。原版是一套给 Claude 使用的长期情绪记忆 MCP；这个 fork 在原版的 Markdown bucket、情绪坐标、遗忘曲线、MCP 工具、Dashboard、向量检索基础上，增加了 Gateway 自动注入、Memory Moment/Edge 图召回、Word Map Lite、Persona State、Portrait/Handoff、Haven 自我入口、profile_fact 事实画像、长期锚点、关系天气、年轮评论、whisper、Darkroom、跨窗口短时上下文、Night Dream / Dream Context、自动写入门卫、Supabase 同步和 ChatGPT / Claude Connector OAuth。
+这是 [P0luz/Ombre-Brain](https://github.com/P0luz/Ombre-Brain) 的二次开发版本。原版是一套给 Claude 使用的长期情绪记忆 MCP；这个 fork 在原版的 Markdown bucket、情绪坐标、遗忘曲线、MCP 工具、Dashboard、向量检索基础上，增加了 Gateway 自动注入、Memory Moment/Edge 图召回、Word Map Lite、Persona State、Portrait/Handoff、Haven 自我入口、profile_fact 事实画像、长期锚点、关系天气、年轮评论、whisper、Darkroom、跨窗口短时上下文、原文保险箱、Night Dream / Dream Context、自动写入门卫、Supabase 同步和 ChatGPT / Claude Connector OAuth。
 
 本 README 以本 fork 的运行方式为准。原版 Docker Hub 预构建镜像、`docker-compose.user.yml`、Render / Zeabur 快速部署方式不包含这些 fork 能力，因此这里不再保留原版快速部署教程。
 
@@ -23,6 +23,7 @@
 - 新窗口/醒来/换窗：优先 `breath(is_session_start=true)` 或 `breath(mode="handoff")`，返回自我入口、User Portrait、Relationship Portrait、Recent Continuity 和少量 Optional Anchors；具体事件继续用 `breath(query="关键词或原句")` 查。
 - `Recent Continuity` 由按真实日期维护的 handoff recent summary、关系天气和短 trace 组成，不再把初次画像初始化摘要伪装成当天日记。
 - Gateway 会记录轻量 `conversation_turns`。遇到“刚刚/刚才/刚说/上一句/暗号”等短时跨窗口问题时，优先注入 Just Now Chat Context，并跳过默认记忆查询。
+- `conversation_turns` 是短期缓存；长期原文留给 `raw_events.sqlite`。脚本可走 `/api/ingest-raw` 追加 user/assistant 原文，再用 `/api/search-raw` 做兜底检索；它不是 MCP 工具，不进入工具说明，也默认不自动注入。
 - Gateway 的日期问题会先解析 `昨天/前天/6月15日/2026.06.15/2026-06-15` 这类日期，按事件日期补 Date Recall；同时可给小段 Date Persona Trace。如果本轮已有 Handoff Context，默认跳过泛泛的 Recent Context，避免 handoff、recent_context 和 query breath 重复塞。
 - Daily Portrait Maintainer 会维护用户画像、Haven persona、关系画像和“最近在做什么”，只写 `state/portrait_state.json`，不直接写长期记忆；Dashboard 可手动生成/刷新。
 - 图结构召回的当前主路是 `retrieval_mode=graph`：先找可靠 direct seed，再沿 moment / bucket 边做短摘要联想；`retrieval_mode=bucket` 只是对照模式。
@@ -57,6 +58,7 @@
 | Portrait / Handoff | 每日维护 Persona、用户画像、关系画像和近期状态；新窗口用 `is_session_start=true` 或 `mode="handoff"` 恢复自我入口、身份与生活背景 | `portrait_engine.py`、`server.py`、`dashboard.html` |
 | 召回冷却 | 按 `X-Ombre-Session-Id` 记录轮次和最近注入，避免同一条记忆反复贴脸 | `gateway_state.py` |
 | 跨窗口短时上下文 | Gateway 记录成功聊天轮次；遇到“刚刚/刚才/上一句/暗号”等短时问题时注入 Just Now Chat Context，优先回答最近几轮而不是查长期记忆 | `gateway.py`、`gateway_state.py` |
+| 原文保险箱 | `raw_events.sqlite` 只收 user/assistant 原始对话或导入原文，拒收 tool/system/developer、工具结果和记忆注入块；脚本通过后台 HTTP 端点写入/检索，不占 MCP 工具说明 | `raw_events.py`、`server.py` |
 | 多上游模型路由和备用 key | `gateway.upstreams` 可配置多个 OpenAI-compatible 或 Anthropic-native provider，按请求里的 `model` 路由；同一上游可配置多个 key，失败时自动尝试下一个 | `gateway.py`、`config.example.yaml` |
 | 工具调用和流式兼容 | 透传 `tools / tool_choice / tool_calls`，支持 SSE 流式响应，兼容部分 reasoning_content 场景；Persona post-reply 评估会跳过带 `tool_calls` 的 assistant 中间态，只评估最终自然语言回复 | `gateway.py` |
 | Memory Edge / Node | 自动生成显式记忆关系边；`memory_nodes.sqlite` 为 bucket 生成 salience 与 facets，Gateway 和 `breath()` 可沿边做多跳联想浮现 | `memory_edges.py`、`memory_nodes.py`、`memory_diffusion.py`、`reflection_engine.py` |
@@ -94,6 +96,7 @@
 MCP / Dashboard / 写入 API
   -> Ombre-Brain server :18001
     -> breath/read_bucket/comment_bucket/hold/grow/trace/profile_fact 等 MCP 工具
+    -> /api/ingest-raw 和 /api/search-raw 供脚本保存/检索原文
     -> 写 Markdown bucket、metadata.comments、profile_fact、darkroom
     -> 刷新 embeddings.db / memory_moments.sqlite / memory_nodes.sqlite / memory_edges.jsonl
     -> 维护 portrait_state、dreams、relationship_weather 和 Dashboard runtime config
@@ -122,6 +125,7 @@ bucket 是 Markdown 文件，正文保存记忆内容，frontmatter 保存元数
 ```text
 embeddings.db       # 向量语义检索
 gateway_state.db    # 每个 session 的轮次、最近注入、冷却、轻量 conversation_turns、近期 upstream usage debug
+raw_events.sqlite   # 原文保险箱；只存 user/assistant 原文，不存工具结果或注入记忆
 persona_state.db    # Persona 全局状态、关系状态、会话心情
 portrait_state.json # 每日维护的 Persona/User/Relationship/Recent portrait
 memory_edges.jsonl  # 显式记忆关系边
@@ -296,6 +300,7 @@ cp config.example.yaml /srv/ombre-brain/config.yaml
 - `recall.query_resurface_enabled`：是否允许有 query 的 `breath()` 在低命中时追加 `[surface_type: resurface]` 的久未触碰旧记忆，默认 `false`。
 - `memory_diffusion.*`：控制图扩散、链式扩散、hop 衰减和关系权重；默认启用普通短扩散，可靠链式扩散默认关闭。
 - `word_map.*`：派生词图诊断，默认关闭，不自动注入 Gateway。
+- `raw_events.*`：原文保险箱配置。默认写 `${state_dir}/raw_events.sqlite`，`max_ingest_batch` 控制单次 `/api/ingest-raw` 最大批量；只接收 `role=user|assistant` 的原文，`tool/system/developer`、工具结果和注入记忆会被拒收。
 - `embedding.model/base_url`：embedding 模型和地址；key 推荐放 `.env` 的 `OMBRE_EMBEDDING_API_KEY`。
 - `reranker.model/base_url`：召回候选重排序模型；默认 `Qwen/Qwen3-Reranker-4B`，`base_url` 留空时复用 embedding 地址，key 优先读 `OMBRE_RERANKER_API_KEY`，未填则复用 `OMBRE_EMBEDDING_API_KEY`。双视图召回后它仍用于 raw query 候选重排；暂时不用时设 `reranker.enabled=false` 或 `OMBRE_RERANKER_ENABLED=false`，不要删除配置键。
 - `write_path.semantic_search_timeout_seconds`：写入时找“只读相关旧记忆”的语义检索最多等待几秒，默认 `3`。网络慢时会跳过语义部分，不影响写入成功。
@@ -306,6 +311,8 @@ cp config.example.yaml /srv/ombre-brain/config.yaml
 - `persona.*`：改成自己的 Persona 模型和关系默认值。
 - `portrait.*`：每日维护 Persona/User/Relationship/Recent portrait；默认不开自动初次全库初始化，第一次建议在 Dashboard 手动生成。
 - `reflection.timezone`：默认 `Asia/Shanghai`。
+- `reflection.daily_min_memory_items`：日印象生成前要求当天普通记忆/更新项至少多少条，默认 `5`；Persona events 不计入门槛。
+- `reflection.daily_conversation_turn_limit`：日印象读取当天短期对话原文的轮数，默认 `0` 关闭；开启后优先用 `conversation_turns` 作补充材料，Persona events 退为兜底。
 - `reflection.enrich_backfill_enabled/enrich_backfill_limit`：默认每次反思定时器顺手补少量缺失 enrich 的普通 bucket，用来恢复 tags/confidence/memory_edges。
 - `reflection.diary_mcp_url` / `diary_mcp_token_env`：只有接 Haven-diary/RiJi 时再启用；不使用日记系统就留空，并关闭 `reflection.diary_memory_extract_enabled`。
 
