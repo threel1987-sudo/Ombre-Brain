@@ -587,6 +587,85 @@ def test_gateway_skips_tool_only_assistant_turn_for_short_and_raw_tables(
     )["count"] == 0
 
 
+def test_gateway_filters_injected_context_before_short_and_raw_tables(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    _, service, state_store, _ = _build_service(monkeypatch, _gateway_config(test_config), bucket_mgr)
+
+    service._record_conversation_turn(
+        session_id="sess-injected-user",
+        round_id=9,
+        user_message="Live private context for the current turn. Use it quietly when relevant.",
+        assistant_message={"role": "assistant", "content": "普通助手回复要保留"},
+        model="model-a",
+        client="test-client",
+        route="/v1/chat/completions",
+    )
+    turns = state_store.list_recent_conversation_turns(
+        profile_id="haven_xiaoyu",
+        session_id="sess-injected-user",
+        limit=5,
+        hours=1,
+    )
+    assert len(turns) == 1
+    assert turns[0]["user_text"] == ""
+    assert turns[0]["assistant_text"] == "普通助手回复要保留"
+    raw = service.raw_event_store.search("", source="gateway", conversation_id="sess-injected-user")
+    assert raw["count"] == 1
+    assert raw["items"][0]["role"] == "assistant"
+
+    service._record_conversation_turn(
+        session_id="sess-injected-assistant",
+        round_id=10,
+        user_message="普通用户原文要保留",
+        assistant_message={
+            "role": "assistant",
+            "content": "Recalled Memory\n- [bucket_id:x] 注入块不该进短期表",
+        },
+        model="model-a",
+        client="test-client",
+        route="/v1/chat/completions",
+    )
+    turns = state_store.list_recent_conversation_turns(
+        profile_id="haven_xiaoyu",
+        session_id="sess-injected-assistant",
+        limit=5,
+        hours=1,
+    )
+    assert len(turns) == 1
+    assert turns[0]["user_text"] == "普通用户原文要保留"
+    assert turns[0]["assistant_text"] == ""
+    raw = service.raw_event_store.search("", source="gateway", conversation_id="sess-injected-assistant")
+    assert raw["count"] == 1
+    assert raw["items"][0]["role"] == "user"
+
+    service._record_conversation_turn(
+        session_id="sess-all-injected",
+        round_id=11,
+        user_message="Live private context for the current turn. Use it quietly when relevant.",
+        assistant_message={
+            "role": "assistant",
+            "content": "Recalled Memory\n- [bucket_id:x] 注入块不该进短期表",
+        },
+        model="model-a",
+        client="test-client",
+        route="/v1/chat/completions",
+    )
+    assert state_store.list_recent_conversation_turns(
+        profile_id="haven_xiaoyu",
+        session_id="sess-all-injected",
+        limit=5,
+        hours=1,
+    ) == []
+    assert service.raw_event_store.search(
+        "",
+        source="gateway",
+        conversation_id="sess-all-injected",
+    )["count"] == 0
+
+
 def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_config, bucket_mgr):
     cfg = _gateway_config(
         test_config,

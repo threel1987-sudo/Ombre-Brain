@@ -22,7 +22,7 @@
 
 - 新窗口/醒来/换窗：优先 `breath(is_session_start=true)` 或 `breath(mode="handoff")`，返回自我入口、User Portrait、Relationship Portrait、Recent Continuity 和少量 Optional Anchors；具体事件继续用 `breath(query="关键词或原句")` 查。
 - `Recent Continuity` 由按真实日期维护的 handoff recent summary、关系天气和短 trace 组成，不再把初次画像初始化摘要伪装成当天日记。
-- Gateway 会记录轻量 `conversation_turns`。遇到“刚刚/刚才/刚说/上一句/暗号”等短时跨窗口问题时，优先注入 Just Now Chat Context，并跳过默认记忆查询。
+- Gateway 会记录轻量 `conversation_turns`，写入前会跳过明确的记忆注入块。遇到“刚刚/刚才/刚说/上一句/暗号”等短时跨窗口问题时，优先注入 Just Now Chat Context，并跳过默认记忆查询。
 - `conversation_turns` 是短期缓存；长期原文留给 `raw_events.sqlite`。Gateway 成功对话会把 user/assistant 原文自动镜像进去，脚本也可走 `/api/ingest-raw` 追加原文，再用 `/api/search-raw` 做兜底检索；它不是 MCP 工具，不进入工具说明，也默认不自动注入。
 - Gateway 的日期问题会先解析 `昨天/前天/6月15日/2026.06.15/2026-06-15` 这类日期，按事件日期补 Date Recall；同时可给小段 Date Persona Trace。如果本轮已有 Handoff Context，默认跳过泛泛的 Recent Context，避免 handoff、recent_context 和 query breath 重复塞。
 - Daily Portrait Maintainer 会维护用户画像、Haven persona、关系画像和“最近在做什么”，只写 `state/portrait_state.json`，不直接写长期记忆；Dashboard 可手动生成/刷新。

@@ -72,7 +72,7 @@ from persona_event_selection import (
     format_persona_event_trace_line,
     select_persona_events,
 )
-from raw_events import RawEventStore
+from raw_events import RawEventStore, raw_event_text_looks_injected
 from reranker_engine import RerankerEngine
 from self_anchor import is_self_anchor_bucket, is_self_anchor_metadata
 from source_refs import source_ref_window
@@ -2557,6 +2557,8 @@ class GatewayService:
                 return
         user_text = self._clean_conversation_turn_text(user_message)
         assistant_text = self._clean_conversation_turn_text(assistant_text)
+        user_text = self._conversation_turn_original_text(user_text, role="user")
+        assistant_text = self._conversation_turn_original_text(assistant_text, role="assistant")
         if not user_text and not assistant_text:
             return
         try:
@@ -2587,6 +2589,17 @@ class GatewayService:
             client=client,
             route=route,
         )
+
+    def _conversation_turn_original_text(self, text: str, *, role: str) -> str:
+        if not text:
+            return ""
+        if raw_event_text_looks_injected(text, {"role": role}):
+            logger.info(
+                "Gateway conversation turn side skipped as injected context | role=%s",
+                role,
+            )
+            return ""
+        return text
 
     def _record_raw_event_turn(
         self,

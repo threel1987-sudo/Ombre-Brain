@@ -24,6 +24,33 @@ INJECTION_SECTION_RE = re.compile(
 )
 
 
+def raw_event_text_looks_injected(text: str, raw: dict[str, Any] | None = None) -> bool:
+    raw = raw or {}
+    metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+    flags = {
+        str(raw.get("kind") or "").lower(),
+        str(raw.get("source_type") or "").lower(),
+        str(metadata.get("kind") or "").lower(),
+        str(metadata.get("source_type") or "").lower(),
+    }
+    if flags & {"injection", "memory_injection", "tool", "tool_result", "system", "developer"}:
+        return True
+    stripped = str(text or "").strip()
+    if stripped.startswith("Live private context for the current turn"):
+        return True
+    if INJECTION_SECTION_RE.search(stripped):
+        return True
+    return "[bucket_id:" in stripped and any(
+        marker in stripped
+        for marker in (
+            "Recalled Memory",
+            "Related Memory",
+            "Recent Context",
+            "Core Memory",
+        )
+    )
+
+
 class RawEventStore:
     """Append-only-ish raw dialogue archive with optional FTS search."""
 
@@ -318,29 +345,7 @@ class RawEventStore:
 
     @staticmethod
     def _looks_injected(text: str, raw: dict[str, Any]) -> bool:
-        metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
-        flags = {
-            str(raw.get("kind") or "").lower(),
-            str(raw.get("source_type") or "").lower(),
-            str(metadata.get("kind") or "").lower(),
-            str(metadata.get("source_type") or "").lower(),
-        }
-        if flags & {"injection", "memory_injection", "tool", "tool_result", "system", "developer"}:
-            return True
-        stripped = text.strip()
-        if stripped.startswith("Live private context for the current turn"):
-            return True
-        if INJECTION_SECTION_RE.search(stripped):
-            return True
-        return "[bucket_id:" in stripped and any(
-            marker in stripped
-            for marker in (
-                "Recalled Memory",
-                "Related Memory",
-                "Recent Context",
-                "Core Memory",
-            )
-        )
+        return raw_event_text_looks_injected(text, raw)
 
     @staticmethod
     def _event_hash(**parts: str) -> str:
