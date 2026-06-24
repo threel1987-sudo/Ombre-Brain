@@ -9053,6 +9053,33 @@ def test_short_taste_query_keeps_real_food_opinion_only(monkeypatch, test_config
     assert service._admit_bucket_for_recall("好吃042", taste)
 
 
+def test_non_explicit_bucket_without_reliable_signal_is_suppressed(monkeypatch, test_config, bucket_mgr):
+    cfg = _gateway_config(
+        test_config,
+        core_memory_budget=0,
+        recent_context_budget=0,
+        related_memory_budget=0,
+        word_map_hint_enabled=False,
+    )
+    bucket_id = _create_bucket(
+        bucket_mgr,
+        content="小雨上次说草莓蛋糕太甜，吃两口就腻。",
+        name="草莓蛋糕口味",
+        hours_ago=6,
+        domain=["日常"],
+    )
+    _, service, _, _ = _build_service(monkeypatch, cfg, bucket_mgr)
+    item = {
+        "bucket": _run(bucket_mgr.get(bucket_id)),
+        "score": 0.8,
+        "semantic_score": 0.0,
+        "keyword_score": 0.0,
+    }
+
+    assert not service._admit_bucket_for_recall("今天代码改得怎么样", item)
+    assert item["admission_reason"] == "low_recall_evidence"
+
+
 def test_non_explicit_low_score_moment_fallback_is_suppressed(monkeypatch, test_config, bucket_mgr):
     cfg = _gateway_config(
         test_config,

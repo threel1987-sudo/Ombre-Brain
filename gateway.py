@@ -9972,7 +9972,24 @@ class GatewayService:
         )
         item["admission_reason"] = decision.reason
         item["recall_policy_debug"] = decision.debug
+        if decision.admit_direct and decision.reason == "non_explicit_query":
+            if not self._bucket_has_reliable_recall_signal(query, item):
+                item["admission_reason"] = "low_recall_evidence"
+                return False
         return decision.admit_direct
+
+    def _bucket_has_reliable_recall_signal(self, query: str, item: dict) -> bool:
+        if not isinstance(item, dict):
+            return False
+        if item.get("planner_lexical_match") or item.get("exact_anchor_match"):
+            return True
+        if self.recall_policy.has_strong_score(
+            semantic_score=item.get("semantic_score"),
+            rerank_score=item.get("rerank_score"),
+        ):
+            return True
+        bucket = item.get("bucket") if isinstance(item.get("bucket"), dict) else None
+        return bool(bucket and self._bucket_has_query_topic_evidence(query, bucket))
 
     def _admit_moment_for_recall(
         self,
