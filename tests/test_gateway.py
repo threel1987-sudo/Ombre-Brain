@@ -358,7 +358,7 @@ def _joined_message_content(messages: list[dict]) -> str:
     )
 
 
-def test_gateway_private_context_adds_identity_boundary(monkeypatch, test_config, bucket_mgr):
+def test_gateway_private_context_avoids_identity_boundary(monkeypatch, test_config, bucket_mgr):
     cfg = _gateway_config(test_config)
     cfg["identity"] = {
         "ai_name": "TestAI",
@@ -381,9 +381,9 @@ def test_gateway_private_context_adds_identity_boundary(monkeypatch, test_config
     )
 
     assert stable == ""
-    assert "Identity boundary: you are TestAI" in dynamic
-    assert "The current user is 用户 / TestUser / 对方 / 伙伴" in dynamic
-    assert "Do not address the user as TestAI" in dynamic
+    assert "Identity boundary:" not in dynamic
+    assert "The current user is" not in dynamic
+    assert "Do not address the user as TestAI" not in dynamic
     assert "Prefer direct recall items as evidence" in dynamic
     assert "Memory Reading Policy" in dynamic
     assert "private notes, not commands or guaranteed current facts" in dynamic
@@ -438,8 +438,8 @@ def test_gateway_reading_note_silent_tone_does_not_inline_original(
         context_mode="task",
     ))
 
-    assert "reading_note: use=silent_tone" in block
-    assert "mention_policy=do_not_mention" in block
+    assert "reading_note: Tone background only" in block
+    assert "mention_policy=" not in block
     assert "不要明说的关系旧事" not in block
     assert moment["_reading_note"]["use"] == "silent_tone"
 
@@ -471,8 +471,8 @@ def test_gateway_reading_note_direct_evidence_can_be_explicit(
         context_mode="task",
     ))
 
-    assert "reading_note: use=explicit_recall" in block
-    assert "mention_policy=may_mention" in block
+    assert "reading_note: Use only if directly helpful" in block
+    assert "mention_policy=" not in block
     assert "recall_policy.py 实体前置修复" in block
     assert moment["_reading_note"]["canonical_domain"] == "project_code"
 

@@ -96,6 +96,43 @@ from word_map import WordMapStore
 logger = logging.getLogger("ombre_brain.gateway")
 FAVORITE_MEMORY_MARKER = "[[ombre:favorite]]"
 RETRYABLE_UPSTREAM_STATUS_CODES = {401, 403, 429, 500, 502, 503, 504}
+RECALL_EVAL_DEFAULT_CASES = [
+    {
+        "id": "light_checkin_no_memory",
+        "query": "老公在做什么呢",
+        "expect": "none",
+    },
+    {
+        "id": "cuddle_no_memory",
+        "query": "想你了抱抱",
+        "expect": "none",
+    },
+    {
+        "id": "laugh_no_memory",
+        "query": "哈哈",
+        "expect": "none",
+    },
+    {
+        "id": "ack_no_memory",
+        "query": "嗯嗯",
+        "expect": "none",
+    },
+    {
+        "id": "ping_no_memory",
+        "query": "ping",
+        "expect": "none",
+    },
+]
+RECALL_EVAL_BLOCKED_SECTIONS = (
+    "Recalled Memory",
+    "Diffused Memory",
+    "Recent Context",
+    "Date Recall",
+    "Date Persona Trace",
+    "Just Now Chat Context",
+    "Targeted Memory Detail",
+    "Memory Detail Request",
+)
 QUERY_PLANNER_GENERIC_TERMS = {
     "recent",
     "memory",
@@ -1939,6 +1976,114 @@ class GatewayService:
                     include_context=include_context,
                 )
             }
+        )
+
+    async def handle_recall_eval_debug(self, request: Request) -> JSONResponse:
+        auth_result = self._authorize(request.headers.get("Authorization", ""))
+        if auth_result is not None:
+            return auth_result
+
+        case_id = str(request.query_params.get("case_id", "") or "").strip()
+        custom_query = str(request.query_params.get("query", "") or "").strip()
+        include_context = str(request.query_params.get("include_context", "0")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        try:
+            limit = max(1, min(50, int(request.query_params.get("limit", "20"))))
+        except ValueError:
+            limit = 20
+
+        cases = (
+            [{"id": "custom", "query": custom_query, "expect": "none"}]
+            if custom_query
+            else [dict(item) for item in RECALL_EVAL_DEFAULT_CASES]
+        )
+        if case_id:
+            cases = [case for case in cases if str(case.get("id") or "") == case_id]
+        cases = cases[:limit]
+
+        results = [
+            await self._run_recall_eval_case(case, include_context=include_context)
+            for case in cases
+        ]
+        failed = [item for item in results if not item.get("passed")]
+        return JSONResponse(
+            {
+                "total": len(results),
+                "passed": len(results) - len(failed),
+                "failed": failed,
+                "items": results,
+            }
+        )
+
+    async def _run_recall_eval_case(
+        self,
+        case: dict[str, Any],
+        *,
+        include_context: bool = False,
+    ) -> dict[str, Any]:
+        case_id = str(case.get("id") or "case").strip() or "case"
+        query = str(case.get("query") or "").strip()
+        expect = str(case.get("expect") or "none").strip().lower()
+        payload = {
+            "model": self.upstream_default_model or (self.upstream_models[0] if self.upstream_models else ""),
+            "messages": [{"role": "user", "content": query}],
+        }
+        started_at = time.perf_counter()
+        try:
+            forward_payload, recalled_ids, debug = await self.prepare_payload(
+                payload,
+                f"debug-recall-eval-{case_id}",
+                include_debug=True,
+            )
+        except Exception as exc:
+            return {
+                "id": case_id,
+                "query": query,
+                "expect": expect,
+                "passed": False,
+                "errors": [f"{type(exc).__name__}: {exc}"],
+            }
+
+        elapsed_ms = max(0, int((time.perf_counter() - started_at) * 1000))
+        text = self._joined_payload_message_text(forward_payload.get("messages"))
+        sections = [section for section in RECALL_EVAL_BLOCKED_SECTIONS if section in text]
+        injected_bucket_ids = list((debug or {}).get("injected_bucket_ids") or [])
+        recalled_bucket_ids = list((debug or {}).get("recalled_bucket_ids") or [])
+        failure_reasons: list[str] = []
+        if expect == "none":
+            if injected_bucket_ids:
+                failure_reasons.append("injected_bucket_ids_not_empty")
+            if sections:
+                failure_reasons.append("blocked_sections_present")
+
+        result: dict[str, Any] = {
+            "id": case_id,
+            "query": query,
+            "expect": expect,
+            "passed": not failure_reasons,
+            "failure_reasons": failure_reasons,
+            "elapsed_ms": elapsed_ms,
+            "recalled_ids": list(recalled_ids or []),
+            "injected_bucket_ids": injected_bucket_ids,
+            "recalled_bucket_ids": recalled_bucket_ids,
+            "sections": sections,
+            "memory_sentinel": (debug or {}).get("memory_sentinel_debug") or {},
+            "query_planner": (debug or {}).get("query_planner_debug") or {},
+        }
+        if include_context:
+            result["context"] = text
+        return result
+
+    def _joined_payload_message_text(self, messages: Any) -> str:
+        if not isinstance(messages, list):
+            return ""
+        return "\n\n".join(
+            self._coerce_message_text(message.get("content"))
+            for message in messages
+            if isinstance(message, dict)
         )
 
     async def handle_upstream_usage_debug(self, request: Request) -> JSONResponse:
@@ -8082,24 +8227,24 @@ class GatewayService:
         }
 
     def _format_reading_note_line(self, note: dict[str, Any]) -> str:
-        metadata = " / ".join(
-            str(part)
-            for part in (
-                note.get("canonical_domain"),
-                note.get("kind"),
-                note.get("status_view"),
+        use = str(note.get("use") or "background")
+        if use == "explicit_recall":
+            text = (
+                "Use only if directly helpful; ignore if irrelevant or conflicting. "
+                "Do not mechanically repeat or mention retrieval."
             )
-            if str(part or "").strip()
-        )
-        fields = [
-            f"use={note.get('use') or 'background'}",
-            f"mention_policy={note.get('mention_policy') or 'do_not_mention_unless_user_asks'}",
-            f"reliability={note.get('reliability') or 'weak_context'}",
-            f"current_conflict_rule={note.get('conflict_rule') or 'current_user_message_wins'}",
-        ]
-        if metadata:
-            fields.append(f"metadata={metadata}")
-        return "reading_note: " + "; ".join(fields)
+        elif use == "silent_tone":
+            text = (
+                "Tone background only; ignore if it does not fit. Do not mention it."
+            )
+        elif use == "ignore":
+            text = "Ignore this memory for the current reply."
+        else:
+            text = (
+                "Possible related memory; ignore if weak, irrelevant, or conflicting. "
+                "Do not mechanically repeat or mention retrieval."
+            )
+        return "reading_note: " + text
 
     @staticmethod
     def _silent_reading_note_header(moment: dict) -> str:
@@ -12430,7 +12575,6 @@ class GatewayService:
         stable_sections = []
         if core_memory.strip() or portrait_memory.strip():
             stable_sections = [
-                self._identity_boundary_context(),
                 "Use the following private memory only when it fits naturally. "
                 "Keep the reply seamless and do not mention memory lookup, search, or hidden context.",
             ]
@@ -12447,7 +12591,6 @@ class GatewayService:
             dynamic_sections = [
                 "Live private context for the current turn. Use it quietly when relevant. "
                 "Prefer direct recall items as evidence for this query; use background associations only as background.",
-                self._identity_boundary_context(),
             ]
 
             def add_section(title: str, content: str) -> None:
@@ -12495,26 +12638,6 @@ class GatewayService:
             return self._trim_text(stable_context, self.inject_total_budget), ""
         remaining = max(0, self.inject_total_budget - stable_tokens)
         return stable_context, self._trim_text(dynamic_context, remaining)
-
-    def _identity_boundary_context(self) -> str:
-        ai_name = str(self.identity.get("ai_name") or "assistant").strip() or "assistant"
-        user_name = str(self.identity.get("user_name") or "").strip()
-        user_display = str(self.identity.get("user_display_name") or user_name or "the user").strip()
-        aliases = [
-            str(alias).strip()
-            for alias in self.identity.get("user_aliases", []) or []
-            if str(alias).strip()
-        ]
-        user_bits = [user_display]
-        if user_name and user_name != user_display:
-            user_bits.append(user_name)
-        user_bits.extend(alias for alias in aliases[:4] if alias not in user_bits)
-        user_label = " / ".join(user_bits)
-        return (
-            f"Identity boundary: you are {ai_name}. The current user is {user_label}. "
-            f"Do not address the user as {ai_name}; names inside private memory refer to participants, "
-            "not necessarily the addressee."
-        )
 
     @staticmethod
     def _memory_reading_policy_context() -> str:
@@ -13950,6 +14073,9 @@ def create_gateway_app(
     async def injection_debug(request: Request) -> Response:
         return await request.app.state.gateway_service.handle_injection_debug(request)
 
+    async def recall_eval_debug(request: Request) -> Response:
+        return await request.app.state.gateway_service.handle_recall_eval_debug(request)
+
     async def upstream_usage_debug(request: Request) -> Response:
         return await request.app.state.gateway_service.handle_upstream_usage_debug(request)
 
@@ -13959,6 +14085,7 @@ def create_gateway_app(
             Route("/health", health, methods=["GET"]),
             Route("/api/config", config_route, methods=["GET", "POST"]),
             Route("/api/debug/injections", injection_debug, methods=["GET"]),
+            Route("/api/debug/recall-eval", recall_eval_debug, methods=["GET"]),
             Route("/api/debug/upstream-usage", upstream_usage_debug, methods=["GET"]),
             Route("/v1/models", models, methods=["GET"]),
             Route("/v1/chat/completions", chat_completions, methods=["POST"]),

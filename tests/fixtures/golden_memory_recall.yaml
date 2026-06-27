@@ -164,7 +164,7 @@ cases:
 
   - id: blue_preference_reliable_chain
     mode: gateway_recall
-    description: 蓝色偏好通过可靠 seed 和边扩散到链条上下文，并携带温度层。
+    description: 蓝色偏好通过可靠 seed 和边扩散到相邻上下文。
     query: 用户 蓝色 偏好
     session_id: golden-blue-preference-chain
     gateway:
@@ -238,12 +238,9 @@ cases:
         - Recalled Memory
         - 蓝色偏好种子
         - Diffused Memory
-        - Chain Bundle
-        - "chain:"
-        - 雨天可靠确认
-        - "temperature:"
-        - "[affect_anchor]"
-        - 蓝色偏好温度
+        - 颜色场景承接
+        - "path"
+        - background_association_not_current_fact
       must_not_include:
         - 咖啡采购
         - 咖啡采购清单
