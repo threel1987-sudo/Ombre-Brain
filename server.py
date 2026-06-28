@@ -1880,9 +1880,9 @@ _BASE_FAVORITE_REFLECTION_HEADINGS = {
     "喜欢的原因",
 }
 _LEGACY_FAVORITE_REFLECTION_HEADINGS = {
-    "havenreflection",
-    "haven喜欢它的原因",
-    "haven喜欢的原因",
+    "akereflection",
+    "ake喜欢它的原因",
+    "ake喜欢的原因",
 }
 
 
@@ -1952,7 +1952,7 @@ _GROW_DIRECT_SECTION_HEADINGS = {
     "original",
     "reflection",
     "assistantreflection",
-    "havenreflection",
+    "akereflection",
     "followup",
     "affectanchor",
 }
