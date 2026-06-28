@@ -8,15 +8,15 @@ _NON_KEY_RE = re.compile(r"[^\w\u4e00-\u9fff]+", re.UNICODE)
 _SPACE_RE = re.compile(r"\s+")
 
 _DROP_TERMS = (
-    "小雨",
-    "池又雨",
+    "澪",
+    "阿澪",
     "宝宝",
     "宝贝",
     "老婆",
     "老公",
-    "哥哥",
-    "Haven",
-    "haven",
+    "daddy",
+    "阿克",
+    "ake",
     "今天",
     "昨天",
     "昨晚",
