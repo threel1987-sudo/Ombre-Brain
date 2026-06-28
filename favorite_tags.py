@@ -5,7 +5,7 @@ from typing import Iterable
 
 
 GENERIC_FAVORITE_TAG = "ai_favorite"
-LEGACY_FAVORITE_TAG = "haven_favorite"
+LEGACY_FAVORITE_TAG = "ake_favorite"
 FAVORITE_PREFIX = "flavor_"
 
 
