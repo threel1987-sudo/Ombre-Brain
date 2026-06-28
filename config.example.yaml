@@ -369,7 +369,7 @@ gateway:
   memory_detail_recall_max_ids: 3
   memory_detail_recall_budget: 1200
   relationship_weather_budget: 220
-  relationship_weather_include_weekly: false
+  relationship_weather_include_weekly: true
   favorite_memory_budget: 180
   favorite_memory_max_cards: 1
   related_memory_budget: 220
@@ -377,7 +377,7 @@ gateway:
   current_inner_state_interval_rounds: 15
   relationship_weather_interval_rounds: 0
   favorite_memory_interval_rounds: 0
-  word_map_hint_enabled: false       # true lets derived Word Map add weak recall candidates; still gated by RecallPolicy
+  word_map_hint_enabled: true       # true lets derived Word Map add weak recall candidates; still gated by RecallPolicy
   word_map_hint_weight: 0.08         # weak bucket-score contribution, not a reliable evidence signal
   word_map_hint_moment_boost: 0.25   # weak moment-search boost for hinted buckets in graph retrieval mode
   word_map_hint_neighbor_limit: 6
@@ -484,12 +484,12 @@ persona:
   enabled: true
   profile_id: "main_profile"
   mode: "llm"
-  base_url: "https://api.deepseek.com/v1"
-  model: "deepseek-chat"
+  base_url: "https://api.siliconflow.cn/v1"
+  model: "deepseek-ai/DeepSeek-V4-Flash"
   # Optional thinking mode override for DeepSeek v4 models:
   #   disabled = non-thinking / enabled = thinking / empty = provider default
   thinking_mode: ""
-  # api_key: ""                  # Use OMBRE_PERSONA_API_KEY; falls back to OMBRE_API_KEY
+  # api_key: "sk-zysgrymkzlusmawyeeacjqnofqycrxaljxjmjpxfdqlcpbky"                  # Use OMBRE_PERSONA_API_KEY; falls back to OMBRE_API_KEY
   temperature: 0.1
   max_tokens: 500
   global_decay_hours: 168
@@ -513,17 +513,17 @@ persona:
     conscientiousness: 0.50
     extraversion: 0.44
     agreeableness: 0.66
-    neuroticism: 0.36
+    neuroticism: 0.60
   initial_relationship:
     affinity: 0.86
-    dominance: 0.38
+    dominance: 0.65
     defensiveness: 0.12
     trust: 0.82
   initial_affect:
     valence: 0.56
     arousal: 0.34
     tenderness: 0.62
-    possessiveness: 0.24
+    possessiveness: 0.72
     longing: 0.34
     security: 0.68
     protective_drive: 0.52
