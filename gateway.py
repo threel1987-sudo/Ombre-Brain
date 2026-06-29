@@ -4852,7 +4852,8 @@ class GatewayService:
         payload: dict[str, Any],
         cache_control: dict[str, str],
     ) -> None:
-        attached = self._attach_cache_control_to_anthropic_content(payload, "system", cache_control)
+        self._attach_cache_control_to_anthropic_content(payload, "system", cache_control)
+        self._attach_cache_control_to_anthropic_tools(payload, cache_control)
         messages = payload.get("messages", [])
         if not isinstance(messages, list):
             return
@@ -4860,18 +4861,27 @@ class GatewayService:
         for message in reversed(messages[:-1]):
             if not isinstance(message, dict):
                 continue
-            if self._attach_cache_control_to_anthropic_content(message, "content", cache_control):
-                attached = True
-                break
-
-        if attached:
-            return
-
-        for message in reversed(messages):
-            if not isinstance(message, dict):
+            if message.get("role") != "assistant":
                 continue
             if self._attach_cache_control_to_anthropic_content(message, "content", cache_control):
-                return
+                break
+
+    def _attach_cache_control_to_anthropic_tools(
+        self,
+        payload: dict[str, Any],
+        cache_control: dict[str, str],
+    ) -> bool:
+        tools = payload.get("tools")
+        if not isinstance(tools, list):
+            return False
+        for tool in reversed(tools):
+            if not isinstance(tool, dict):
+                continue
+            if tool.get("cache_control"):
+                return True
+            tool["cache_control"] = deepcopy(cache_control)
+            return True
+        return False
 
     def _attach_cache_control_to_anthropic_content(
         self,

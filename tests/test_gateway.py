@@ -2717,6 +2717,53 @@ def test_gateway_explicit_anthropic_cache_uses_prior_message_before_current_user
     assert "cache_control" not in current_content
 
 
+def test_gateway_explicit_anthropic_cache_marks_tools_and_prior_assistant():
+    service = object.__new__(GatewayService)
+    payload = {
+        "system": "稳定系统提示",
+        "tools": [
+            {
+                "name": "read_memory",
+                "description": "Read memory by id.",
+                "input_schema": {"type": "object"},
+            }
+        ],
+        "messages": [
+            {"role": "user", "content": "第一轮"},
+            {"role": "assistant", "content": "第一轮回答"},
+            {"role": "user", "content": "今天怎么样？"},
+        ],
+    }
+
+    service._apply_explicit_anthropic_cache_control(
+        payload,
+        {"type": "ephemeral", "ttl": "1h"},
+    )
+
+    assert payload["system"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert payload["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    prior_content = payload["messages"][-2]["content"]
+    assert prior_content[-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    current_content = payload["messages"][-1]["content"]
+    assert isinstance(current_content, str)
+    assert "cache_control" not in current_content
+
+
+def test_gateway_explicit_anthropic_cache_skips_user_only_history():
+    service = object.__new__(GatewayService)
+    payload = {
+        "messages": [
+            {"role": "user", "content": "上一条用户消息"},
+            {"role": "user", "content": "当前用户消息"},
+        ],
+    }
+
+    service._apply_explicit_anthropic_cache_control(payload, {"type": "ephemeral"})
+
+    assert payload["messages"][0]["content"] == "上一条用户消息"
+    assert payload["messages"][1]["content"] == "当前用户消息"
+
+
 def test_gateway_streams_native_anthropic_messages(monkeypatch, test_config, bucket_mgr):
     monkeypatch.setenv("OMBRE_GATEWAY_TOKEN", "gateway-secret")
     monkeypatch.setenv("OMBRE_GATEWAY_ANTHROPIC_API_KEY", "anthropic-upstream-secret")
