@@ -756,6 +756,26 @@ LOCATABLE_STRIP_TERMS = frozenset(
         "接上",
     }
 )
+LOCATABLE_QUESTION_TAIL_TERMS = (
+    "分别是谁",
+    "都有谁",
+    "有哪些",
+    "哪几个",
+    "哪一位",
+    "哪一条",
+    "是什么",
+    "叫什么",
+    "有谁",
+    "都谁",
+    "哪位",
+    "哪条",
+    "哪个",
+    "哪些",
+    "多少",
+    "是谁",
+    "什么",
+    "谁",
+)
 LOW_SIGNAL_QUERY_SHELL_MARKERS = frozenset(
     {
         *AUTO_VAGUE_RECALL_MARKERS,
@@ -2167,11 +2187,32 @@ class RecallPolicy:
                 compact = compact.replace(fragment, "")
 
         compact = re.sub(r"[我你他她它的是了啦呢啊呀嘛吗吧欸诶得]+", "", compact)
+        compact = self._strip_locatable_question_tail(compact)
         if re.fullmatch(r"[a-z][a-z0-9_.:/-]{1,}", compact):
             for match in ENTITY_ENGLISH_RE.finditer(cleaned):
                 if self._compact_entity_keyword(match.group(0)) == compact:
                     return match.group(0)
         return compact
+
+    @classmethod
+    def _strip_locatable_question_tail(cls, compact: str) -> str:
+        text = str(compact or "").strip()
+        if not text:
+            return ""
+        tails = sorted(
+            (cls._compact_entity_keyword(term) for term in LOCATABLE_QUESTION_TAIL_TERMS),
+            key=len,
+            reverse=True,
+        )
+        changed = True
+        while changed:
+            changed = False
+            for tail in tails:
+                if tail and text.endswith(tail) and len(text) > len(tail):
+                    text = text[: -len(tail)].strip("的")
+                    changed = True
+                    break
+        return text
 
     def _locatable_query_term_allowed(self, value: str) -> bool:
         key = self._compact_entity_keyword(value)

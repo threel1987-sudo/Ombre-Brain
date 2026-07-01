@@ -5022,7 +5022,7 @@ def test_gateway_hook_recall_returns_cards_without_upstream(
     assert payload["notes"] == payload["cards"]
 
 
-def test_gateway_hook_recall_normalizes_pronouns_with_configured_identity(
+def test_gateway_hook_recall_uses_word_map_terms_from_original_query(
     monkeypatch,
     test_config,
     bucket_mgr,
@@ -5034,6 +5034,10 @@ def test_gateway_hook_recall_normalizes_pronouns_with_configured_identity(
         related_memory_budget=0,
         current_inner_state_interval_rounds=0,
         query_planner_enabled=False,
+        retrieval_mode="bucket",
+        word_map_hint_enabled=True,
+        word_map_hint_weight=1.0,
+        first_card_min_score=0.01,
     )
     cfg["identity"] = {
         **cfg.get("identity", {}),
@@ -5050,13 +5054,34 @@ def test_gateway_hook_recall_normalizes_pronouns_with_configured_identity(
         domain=["社交"],
     )
     embedding_queries: list[str] = []
+
+    class FakeWordMap:
+        enabled = True
+
+        def __init__(self):
+            self.calls = []
+
+        def hint_buckets_for_terms(self, terms, *, neighbor_limit=6, bucket_limit=12):
+            self.calls.append(list(terms))
+            return {
+                "bucket_scores": {bucket_id: 1.0},
+                "evidence": {
+                    bucket_id: {
+                        "direct_terms": ["笔友"],
+                        "neighbor_terms": ["忱孚", "Claude 初"],
+                    }
+                },
+            }
+
     app, service, _, captured = _build_service(
         monkeypatch,
         cfg,
         bucket_mgr,
-        embedding_results={"笔友": [(bucket_id, 0.96)]},
+        embedding_results=[],
         embedding_queries=embedding_queries,
     )
+    fake_word_map = FakeWordMap()
+    service.word_map_store = fake_word_map
 
     with TestClient(app) as client:
         response = client.post(
@@ -5066,6 +5091,7 @@ def test_gateway_hook_recall_normalizes_pronouns_with_configured_identity(
                 "query": "你的笔友都有谁？",
                 "session_id": "sess-hook-recall-pronoun",
                 "max_cards": 1,
+                "include_debug": True,
             },
         )
 
@@ -5073,13 +5099,15 @@ def test_gateway_hook_recall_normalizes_pronouns_with_configured_identity(
     payload = response.json()
     assert captured == []
     assert payload["query"] == "你的笔友都有谁？"
-    assert payload["recall_query"] == "笔友"
-    assert any(query == "笔友" for query in embedding_queries)
+    assert "recall_query" not in payload
+    assert any("笔友" in terms for terms in fake_word_map.calls)
     assert len(payload["cards"]) == 1
     assert payload["cards"][0]["bucket_id"] == bucket_id
     assert "Lapis 的笔友名册" in payload["additional_context"]
-    assert service._hook_recall_query_for_memory("我的蓝色偏好是什么？") == "蓝色偏好"
-    assert service._hook_recall_query_for_memory("你的名字是什么？") == "Lapis 的名字"
+    word_map_debug = payload["debug"]["query_planner_debug"]["word_map_hints"]
+    assert word_map_debug["enabled"] is True
+    assert bucket_id in word_map_debug["bucket_ids"]
+    assert "笔友" in word_map_debug["terms"]
 
 
 def test_gateway_direct_event_date_tag_suppresses_created_tag(
