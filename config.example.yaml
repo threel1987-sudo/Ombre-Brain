@@ -93,8 +93,8 @@ memory_write_gate:
 dehydration:
   # Supports any OpenAI-compatible API: DeepSeek / Ollama / LM Studio / vLLM / Gemini etc.
   # 支持所有 OpenAI 兼容 API：DeepSeek / Ollama / LM Studio / vLLM / Gemini 等
-  model: "deepseek-chat"
-  base_url: "https://api.deepseek.com/v1"
+  model: "deehpseek-ai/DeepSeek-V4-Flash"
+  base_url: "https://api.siliconflow.cn/v1"
   # Optional thinking mode override for DeepSeek v4 models:
   #   disabled = non-thinking / enabled = thinking / empty = provider default
   # DeepSeek v4 可选思考模式覆盖：
@@ -129,7 +129,7 @@ anchor:
 # entry_bucket_id selects the total self entry used by handoff and portrait.
 # Empty = fall back to the highest-ranked self_anchor bucket.
 self_anchor:
-  entry_bucket_id: ""
+  entry_bucket_id: "41acc7a0e3f3"
 
 # --- Decay parameters / 记忆衰减参数 ---
 # Simulates Ebbinghaus forgetting curve, auto-archives inactive memories
@@ -221,7 +221,7 @@ recall:
 # It is rebuilt manually from buckets and does not inject anything into Gateway by itself.
 # 派生的关键词/共现索引，用于诊断和后续召回提示；手动从桶重建，本身不注入 Gateway。
 word_map:
-  enabled: false
+  enabled: true
   max_terms_per_bucket: 16
   edge_top_k: 10
   min_term_len: 2
@@ -643,7 +643,7 @@ dream:
   material_limit: 5
   old_echo_enabled: true           # add one old memory echo without counting it as recent material
   old_echo_min_age_hours: 72       # old echo must be older than this many hours
-  identity_anchor_id: "c0b8ddb7423e"
+  identity_anchor_id: "41acc7a0e3f3"
   min_surface_age_hours: 3
   surface_threshold: 0.62
   attempt_threshold: 0.45
