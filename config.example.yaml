@@ -392,6 +392,7 @@ gateway:
   recalled_memory_budget: 900
   direct_render_mode: auto   # auto | compact | full; direct/recalled display shape
   retrieval_mode: graph       # graph | bucket; bucket skips moment graph diffusion
+  bucket_list_cache_ttl_seconds: 300 # cache active bucket list inside Gateway; 0 disables
   portrait_memory_enabled: true  # read-only stable portrait cache from profile_fact by default
   portrait_memory_budget: 360
   portrait_memory_max_sources: 8

@@ -303,6 +303,7 @@ def load_config(config_path: str = None) -> dict:
             "recent_context_budget": 300,
             "recalled_memory_budget": 400,
             "direct_render_mode": "auto",
+            "bucket_list_cache_ttl_seconds": 300,
             "portrait_memory_enabled": False,
             "portrait_memory_budget": 360,
             "portrait_memory_max_sources": 8,

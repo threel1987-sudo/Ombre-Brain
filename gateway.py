@@ -656,6 +656,8 @@ class GatewayService:
         self.memory_moment_store = MemoryMomentStore(config)
         self._moment_graph_cache_signature = ""
         self._moment_graph_cache_value: tuple[list[dict], dict[str, list[dict]], list[dict]] | None = None
+        self._moment_graph_cache_bucket_list_id = 0
+        self._moment_graph_cache_edge_stamp: tuple[int, int] = (0, 0)
         self.relevance_options = memory_relevance_options_from_config(config)
         self.axis_lite_cfg = (
             self.gateway_cfg.get("axis_lite", {})
@@ -824,6 +826,11 @@ class GatewayService:
         self.favorite_memory_budget = int(self.gateway_cfg.get("favorite_memory_budget", 180))
         self.favorite_memory_max_cards = max(0, int(self.gateway_cfg.get("favorite_memory_max_cards", 1)))
         self.related_memory_budget = int(self.gateway_cfg.get("related_memory_budget", 220))
+        self.bucket_list_cache_ttl_seconds = max(
+            0.0,
+            float(self.gateway_cfg.get("bucket_list_cache_ttl_seconds", 300)),
+        )
+        self._bucket_list_cache: dict[bool, dict[str, Any]] = {}
         self.diffusion_options = diffusion_options_from_config(config)
         self.diffusion_inject_max_items = max(
             0,
@@ -1023,6 +1030,7 @@ class GatewayService:
                 "current_inner_state_interval_rounds": self.current_inner_state_interval_rounds,
                 "direct_render_mode": self.direct_render_mode,
                 "retrieval_mode": self.retrieval_mode,
+                "bucket_list_cache_ttl_seconds": self.bucket_list_cache_ttl_seconds,
                 "recall_fusion_mode": self.recall_fusion_mode,
                 "reranker": {
                     "enabled": bool(getattr(self.reranker_engine, "enabled", False)),
@@ -1096,6 +1104,7 @@ class GatewayService:
             "current_inner_state_interval_rounds": self.current_inner_state_interval_rounds,
             "direct_render_mode": self.direct_render_mode,
             "retrieval_mode": self.retrieval_mode,
+            "bucket_list_cache_ttl_seconds": self.bucket_list_cache_ttl_seconds,
             "recall_fusion_mode": self.recall_fusion_mode,
             "word_map_hint_enabled": self.word_map_hint_enabled,
             "portrait_memory_enabled": self.portrait_memory_enabled,
@@ -1564,6 +1573,11 @@ class GatewayService:
             self.retrieval_mode = self._normalize_retrieval_mode(payload["retrieval_mode"])
             self.gateway_cfg["retrieval_mode"] = self.retrieval_mode
             updated.append("gateway.retrieval_mode")
+        if "bucket_list_cache_ttl_seconds" in payload:
+            self.bucket_list_cache_ttl_seconds = max(0.0, float(payload["bucket_list_cache_ttl_seconds"]))
+            self.gateway_cfg["bucket_list_cache_ttl_seconds"] = self.bucket_list_cache_ttl_seconds
+            self._clear_gateway_bucket_cache()
+            updated.append("gateway.bucket_list_cache_ttl_seconds")
         if "recall_fusion_mode" in payload:
             self.recall_fusion_mode = self._normalize_recall_fusion_mode(payload["recall_fusion_mode"])
             self.gateway_cfg["recall_fusion_mode"] = self.recall_fusion_mode
@@ -2392,6 +2406,30 @@ class GatewayService:
             }
         )
 
+    async def _list_gateway_buckets(self, *, include_archive: bool = False) -> list[dict]:
+        ttl = self.bucket_list_cache_ttl_seconds
+        key = bool(include_archive)
+        now = time.monotonic()
+        cached = self._bucket_list_cache.get(key)
+        if ttl > 0 and cached and now < float(cached.get("expires_at", 0.0)):
+            return cached["buckets"]
+
+        buckets = await self.bucket_mgr.list_all(include_archive=include_archive)
+        if ttl > 0:
+            self._bucket_list_cache[key] = {
+                "buckets": buckets,
+                "expires_at": now + ttl,
+                "loaded_at": now,
+            }
+        return buckets
+
+    def _clear_gateway_bucket_cache(self) -> None:
+        self._bucket_list_cache.clear()
+        self._moment_graph_cache_signature = ""
+        self._moment_graph_cache_value = None
+        self._moment_graph_cache_bucket_list_id = 0
+        self._moment_graph_cache_edge_stamp = (0, 0)
+
     async def prepare_payload(
         self,
         payload: dict,
@@ -2419,7 +2457,7 @@ class GatewayService:
         mark_step("resolve_model", stage_started_at)
 
         stage_started_at = time.perf_counter()
-        all_buckets = await self.bucket_mgr.list_all(include_archive=False)
+        all_buckets = await self._list_gateway_buckets(include_archive=False)
         mark_step("list_all_buckets", stage_started_at)
 
         stage_started_at = time.perf_counter()
@@ -4327,7 +4365,7 @@ class GatewayService:
         )
 
     async def _build_memory_detail_recall_context(self, bucket_ids: list[str]) -> tuple[str, list[str]]:
-        all_buckets = await self.bucket_mgr.list_all(include_archive=False)
+        all_buckets = await self._list_gateway_buckets(include_archive=False)
         bucket_map = {
             str(bucket.get("id") or ""): bucket
             for bucket in all_buckets
@@ -7423,6 +7461,14 @@ class GatewayService:
         self,
         all_buckets: list[dict],
     ) -> tuple[list[dict], dict[str, list[dict]], list[dict]]:
+        bucket_list_id = id(all_buckets)
+        edge_stamp = self._memory_edge_store_stamp()
+        if (
+            self._moment_graph_cache_value is not None
+            and bucket_list_id == self._moment_graph_cache_bucket_list_id
+            and edge_stamp == self._moment_graph_cache_edge_stamp
+        ):
+            return self._moment_graph_cache_value
         recallable_buckets = [bucket for bucket in all_buckets if not is_self_anchor_bucket(bucket)]
         bucket_edges = self.memory_edge_store.list_edges()
         signature = self._moment_graph_signature(recallable_buckets, bucket_edges)
@@ -7440,7 +7486,19 @@ class GatewayService:
         value = (moments, grouped, edges)
         self._moment_graph_cache_signature = signature
         self._moment_graph_cache_value = value
+        self._moment_graph_cache_bucket_list_id = bucket_list_id
+        self._moment_graph_cache_edge_stamp = edge_stamp
         return value
+
+    def _memory_edge_store_stamp(self) -> tuple[int, int]:
+        path = str(getattr(self.memory_edge_store, "path", "") or "")
+        if not path:
+            return (0, 0)
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return (0, 0)
+        return (int(getattr(stat, "st_mtime_ns", 0)), int(stat.st_size))
 
     @staticmethod
     def _moment_graph_signature(buckets: list[dict], bucket_edges: list[dict] | None = None) -> str:
@@ -14622,7 +14680,7 @@ class GatewayService:
                 "hook_recall_debug": {"mode": "fast", "skip_reason": "max_cards_zero"},
             }
 
-        all_buckets = await self.bucket_mgr.list_all(include_archive=False)
+        all_buckets = await self._list_gateway_buckets(include_archive=False)
         domain_query = str(domain_sentinel_debug.get("query") or "").strip()
         search_query = self._dynamic_recall_search_query(domain_query or query, memory_sentinel_debug)
         selected_buckets, suppressed_buckets, query_planner_debug = await self._select_dynamic_buckets(

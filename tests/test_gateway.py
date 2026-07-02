@@ -122,6 +122,16 @@ class DummyRerankerEngine:
         return results[:top_n] if top_n else results
 
 
+class CountingBucketManager:
+    def __init__(self, buckets: list[dict] | None = None):
+        self.buckets = buckets or []
+        self.list_all_calls = 0
+
+    async def list_all(self, include_archive: bool = False) -> list[dict]:
+        self.list_all_calls += 1
+        return self.buckets
+
+
 class DummyPersonaEngine:
     enabled = True
     profile_id = "haven_xiaoyu"
@@ -356,6 +366,62 @@ def _joined_message_content(messages: list[dict]) -> str:
         for message in messages
         if isinstance(message, dict)
     )
+
+
+def test_gateway_prepare_reuses_bucket_list_cache(monkeypatch, test_config):
+    bucket_mgr = CountingBucketManager()
+    cfg = _gateway_config(
+        test_config,
+        bucket_list_cache_ttl_seconds=60,
+        recalled_memory_budget=0,
+        related_memory_budget=0,
+        recent_context_budget=0,
+        current_inner_state_interval_rounds=0,
+        relationship_weather_interval_rounds=0,
+        portrait_memory_enabled=False,
+        memory_sentinel_enabled=False,
+        dream_inject_enabled=False,
+    )
+    _, service, _, _ = _build_service(monkeypatch, cfg, bucket_mgr)
+    payload = {
+        "model": cfg["gateway"]["upstream_default_model"],
+        "messages": [{"role": "user", "content": "今天只是普通聊天。"}],
+    }
+
+    _run(service.prepare_payload(deepcopy(payload), "cache-a"))
+    _run(service.prepare_payload(deepcopy(payload), "cache-b"))
+
+    assert bucket_mgr.list_all_calls == 1
+
+
+def test_moment_graph_refresh_reuses_same_bucket_list_without_signature(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    bucket_id = _create_bucket(
+        bucket_mgr,
+        content="### moment\n小雨和 Haven 确认火焰是关系意象。",
+        name="火焰意象",
+        hours_ago=2,
+        domain=["relationship.symbol"],
+    )
+    all_buckets = _run(bucket_mgr.list_all())
+    _, service, _, _ = _build_service(monkeypatch, _gateway_config(test_config), bucket_mgr)
+    original_signature = GatewayService._moment_graph_signature
+    signature_calls: list[int] = []
+
+    def counted_signature(buckets, bucket_edges=None):
+        signature_calls.append(len(buckets or []))
+        return original_signature(buckets, bucket_edges)
+
+    monkeypatch.setattr(GatewayService, "_moment_graph_signature", staticmethod(counted_signature))
+
+    _all_moments, grouped_moments, _edges = service._refresh_moment_graph(all_buckets)
+    service._refresh_moment_graph(all_buckets)
+
+    assert bucket_id in grouped_moments
+    assert signature_calls == [1]
 
 
 def test_gateway_private_context_avoids_identity_boundary(monkeypatch, test_config, bucket_mgr):
