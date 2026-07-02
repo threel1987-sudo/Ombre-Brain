@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy project files / 复制项目文件
 COPY *.py .
+COPY identity_private.yaml .
 COPY resources ./resources
 COPY scripts ./scripts
 COPY dashboard.html .
