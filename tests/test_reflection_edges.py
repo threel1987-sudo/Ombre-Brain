@@ -1053,6 +1053,37 @@ def test_daily_chat_memory_normalization_rejects_raw_probe_candidate(test_config
     assert candidates == []
 
 
+def test_daily_chat_memory_title_uses_identity_config(test_config):
+    cfg = _no_api_config(test_config)
+    cfg["identity"] = {
+        "ai_name": "Ombre",
+        "user_name": "rain_user",
+        "user_display_name": "Rain",
+        "user_aliases": ["雨天"],
+    }
+    engine = ReflectionEngine(cfg)
+
+    user_title = engine._daily_chat_memory_title(
+        "Rain在 2026-07-01 的聊天里表达了一个边界：不要写死名字。",
+        "boundary",
+        "2026-07-01",
+    )
+    alias_title = engine._daily_chat_memory_title(
+        "雨天在 2026-07-01 的聊天里表达了一个稳定偏好：默认变量化。",
+        "stable_preference",
+        "2026-07-01",
+    )
+    ai_title = engine._daily_chat_memory_title(
+        "Ombre在 2026-07-01 的聊天里留下了一段关系连续性：确认自动记忆要消解代词。",
+        "relationship_anchor",
+        "2026-07-01",
+    )
+
+    titles = [user_title, alias_title, ai_title]
+    assert all("2026-07-01" not in title for title in titles)
+    assert all(not title.startswith(("Rain", "雨天", "Ombre")) for title in titles)
+
+
 @pytest.mark.asyncio
 async def test_run_due_daily_chat_memory_defaults_to_auto_after_midnight(test_config, monkeypatch):
     cfg = _no_api_config(test_config)

@@ -1571,11 +1571,21 @@ class ReflectionEngine:
     def _daily_chat_memory_title(self, content: str, kind: str, key: str) -> str:
         text = re.sub(r"#+\s*(moment|original|reflection|todo|affect_anchor).*", "", str(content or ""), flags=re.I | re.S)
         text = strip_wikilinks(text)
-        text = re.sub(r"^\d{4}-\d{2}-\d{2}\s*(发生了|的聊天里|确认了|留下|自动记忆)?", "", text).strip(" ：:，,。")
+        date_prefix_pattern = r"^\d{4}-\d{2}-\d{2}\s*(发生了|的聊天里|确认了|留下|自动记忆)?"
+        text = re.sub(date_prefix_pattern, "", text).strip(" ：:，,。")
+        identity_names_for_title = [
+            self.identity.get("user_display_name"),
+            self.identity.get("user_name"),
+            self.identity.get("ai_name"),
+            *(self.identity.get("user_aliases") or []),
+        ]
+        identity_prefixes = []
+        for name in identity_names_for_title:
+            clean_name = str(name or "").strip()
+            if clean_name and clean_name not in identity_prefixes:
+                identity_prefixes.extend([f"{clean_name}在", f"{clean_name} 在"])
         prefixes = [
-            "池又雨在",
-            "小雨在",
-            "Haven在",
+            *identity_prefixes,
             "这次聊天确认了",
             "这次聊天里留下",
             "一个仍会影响后续执行的项目状态",
@@ -1584,6 +1594,7 @@ class ReflectionEngine:
         for prefix in prefixes:
             if text.startswith(prefix):
                 text = text[len(prefix):].strip(" ：:，,。")
+                text = re.sub(date_prefix_pattern, "", text).strip(" ：:，,。")
         if not text:
             text = self._kind_label(kind)
         text = re.split(r"[。！？!?；;\n]", text, maxsplit=1)[0].strip(" ：:，,。")

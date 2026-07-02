@@ -498,7 +498,7 @@ def test_dashboard_reflection_calendar_marks_events_and_sources():
     assert "function isReflectionEventBucket(bucket)" in html
     assert "reflection-day-dot event" in html
     assert "当天发生了什么" in html
-    assert "reflectionSourceChips(detail)" in html
+    assert "reflectionSourceChips(detail, bucket.reflection_date)" in html
     assert "source_bucket_ids" in html
     assert "source_raw_event_ids" in html
     assert "return '';" in html.split("function getBucketEventDate", 1)[1].split("function isDailyImpressionBucket", 1)[0]
