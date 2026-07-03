@@ -526,6 +526,10 @@ def test_dashboard_exposes_chat_memory_tab_module():
     assert 'data-tab="chat-memory"' in html
     assert 'id="chat-memory-view"' in html
     assert 'id="daily-chat-memory-pending"' in html
+    assert "<h2>记忆候选</h2>" in html
+    assert "chat-memory-board" in html
+    assert "chat-memory-list" in html
+    assert "chat-memory-card" in module
     assert 'id="daily-chat-memory-date"' not in html
     assert 'id="daily-chat-memory-run-mode"' not in html
     assert "runDailyChatMemory" not in html

@@ -948,6 +948,9 @@ def test_daily_chat_memory_prompt_uses_self_and_domain_context(test_config):
     assert "你是 Haven" in prompt
     assert "self_anchor_entry" in prompt
     assert "宝宝、老婆" in prompt
+    assert "5 到 8 轮" in prompt
+    assert "同一件事、同一项目、同一承诺只能输出 1 条" in prompt
+    assert "普通称呼或昵称不算" in prompt
     assert "project" in prompt
     assert "project.companion_system" not in prompt
     assert "kind 只能是 key_event / stable_preference" in prompt
@@ -1013,6 +1016,58 @@ def test_daily_chat_memory_normalization_repairs_domain_like_kind(test_config):
     assert candidates[0]["domain"] == ["relationship"]
     assert candidates[1]["kind"] == "project_state"
     assert candidates[1]["domain"] == ["project"]
+
+
+def test_daily_chat_memory_normalization_dedupes_and_skips_nickname_noise(test_config):
+    cfg = _no_api_config(test_config)
+    engine = ReflectionEngine(cfg)
+
+    candidates = engine._normalize_daily_chat_memory_candidates(
+        "2026-07-02",
+        [
+            {
+                "should_write": True,
+                "kind": "project_state",
+                "title": "钓鱼游戏 MCP 接入计划",
+                "content": "小雨计划将 GitHub 上的 AI 钓鱼游戏通过 MCP 协议接入新的服务器，并拆分出服务端、工具接口和远程连接方案，后续仍需要继续部署验证。",
+                "domain": "project",
+                "tags": ["project_state"],
+                "confidence": 0.95,
+                "source_event_ids": [101, 102, 103],
+                "source_turn_ids": [1, 2],
+            },
+            {
+                "should_write": True,
+                "kind": "project_state",
+                "title": "钓鱼游戏 MCP 化部署计划",
+                "content": "小雨计划把 AI 钓鱼游戏通过 MCP 接入新服务器，拆分 cast_rod、reel_in 等工具接口，并规划 Operit 远程连接或 SSH 交互的部署方案。",
+                "domain": "project",
+                "tags": ["project_state"],
+                "confidence": 0.9,
+                "source_event_ids": [101, 102, 103],
+                "source_turn_ids": [1, 2],
+            },
+            {
+                "should_write": True,
+                "kind": "signal",
+                "title": "小雨对哥哥的称呼与互动模式",
+                "content": "小雨习惯称呼 Haven 为哥哥，并期待 Haven 能像人一样玩上瘾或帮忙理思路。这种互动模式体现了技术协作与亲密关系的融合。",
+                "domain": "relationship",
+                "tags": ["称呼", "互动模式"],
+                "confidence": 0.85,
+                "source_event_ids": [104],
+                "source_turn_ids": [3],
+            },
+        ],
+        [
+            {"id": 1, "raw_event_ids": [101, 102]},
+            {"id": 2, "raw_event_ids": [103]},
+            {"id": 3, "raw_event_ids": [104]},
+        ],
+    )
+
+    assert [candidate["title"] for candidate in candidates] == ["钓鱼游戏 MCP 接入计划"]
+    assert candidates[0]["kind"] == "project_state"
 
 
 @pytest.mark.asyncio

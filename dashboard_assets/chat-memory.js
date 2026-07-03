@@ -31,13 +31,13 @@
     return items.map(function (item) {
       var candidate = item.candidate || {};
       var id = item.id || '';
-      return '<div class="word-map-card">' +
+      return '<div class="chat-memory-card">' +
         '<strong>' + esc(candidate.title || id) + '</strong>' +
-        '<div>' + esc(candidate.content || '') + '</div>' +
-        '<div class="word-map-card-meta">' +
+        '<div class="chat-memory-card-body">' + esc(candidate.content || '') + '</div>' +
+        '<div class="chat-memory-card-meta">' +
           esc((candidate.kind || 'memory') + ' · ' + (item.date || '') + ' · confidence ' + (candidate.confidence || '')) +
         '</div>' +
-        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">' +
+        '<div class="chat-memory-card-actions">' +
           '<button type="button" onclick="confirmDailyChatMemory(\'' + jsString(id) + '\', \'confirm\')">写入</button>' +
           '<button type="button" class="danger" onclick="confirmDailyChatMemory(\'' + jsString(id) + '\', \'reject\')">拒绝</button>' +
         '</div>' +

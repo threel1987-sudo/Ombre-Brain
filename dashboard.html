@@ -2363,6 +2363,47 @@
     color: var(--text-light);
     font-size: 11px;
   }
+  .chat-memory-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .chat-memory-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 12px;
+  }
+  .chat-memory-card {
+    display: grid;
+    grid-template-rows: auto 1fr auto auto;
+    gap: 9px;
+    min-width: 0;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: rgba(255,255,255,0.26);
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.65;
+    box-shadow: inset 1px 1px 2px rgba(90, 72, 52, 0.04);
+  }
+  .chat-memory-card strong {
+    display: block;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  .chat-memory-card-body {
+    overflow-wrap: anywhere;
+  }
+  .chat-memory-card-meta {
+    color: var(--text-light);
+    font-size: 11px;
+  }
+  .chat-memory-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 2px;
+  }
 
   @media (max-width: 768px) {
     .header { padding: 20px; flex-wrap: wrap; }
@@ -2417,6 +2458,7 @@
     .word-map-grid { grid-template-columns: 1fr; }
     .reflection-toolbar { align-items: flex-start; flex-direction: column; }
     .reflection-board { grid-template-columns: 1fr; }
+    .chat-memory-list { grid-template-columns: 1fr; }
     .reflection-day-panel { height: auto; max-height: none; }
     .reflection-entry { grid-template-columns: 1fr; }
   }
@@ -2806,17 +2848,17 @@
   <div class="reflection-shell">
     <div class="reflection-toolbar">
       <div class="reflection-title">
-        <h2>自动记忆</h2>
+        <h2>记忆候选</h2>
         <p>每天本地零点后从原文保险箱里挑长期记忆；默认自动写入，review 模式下在这里确认。</p>
       </div>
     </div>
     <div class="bucket-bulk-message" id="daily-chat-memory-message"></div>
-    <div class="reflection-board">
+    <div class="reflection-board chat-memory-board">
       <section class="reflection-card">
         <div class="reflection-card-head">
           <h3>待确认</h3>
         </div>
-        <div class="word-map-list" id="daily-chat-memory-pending">
+        <div class="chat-memory-list" id="daily-chat-memory-pending">
           <div class="loading">暂无待确认候选。</div>
         </div>
       </section>
