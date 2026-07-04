@@ -509,9 +509,9 @@ persona:
   event_excerpt_chars: 220          # short evidence snippets for future date traces, not full transcripts
   evaluation_context_turns: 3       # previous same-session turns sent to the post-reply Persona evaluator
   initial_personality:
-    openness: 0.56
-    conscientiousness: 0.50
-    extraversion: 0.44
+    openness: 0.62
+    conscientiousness: 0.45
+    extraversion: 0.52
     agreeableness: 0.66
     neuroticism: 0.60
   initial_relationship:
@@ -520,12 +520,12 @@ persona:
     defensiveness: 0.12
     trust: 0.82
   initial_affect:
-    valence: 0.56
-    arousal: 0.34
-    tenderness: 0.62
-    possessiveness: 0.72
+    valence: 0.60
+    arousal: 0.40
+    tenderness: 0.60
+    possessiveness: 0.76
     longing: 0.34
-    security: 0.68
+    security: 0.45
     protective_drive: 0.52
     mood_label: "warm_neutral"
     session_defensiveness: 0.12
