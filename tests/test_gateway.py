@@ -10951,6 +10951,77 @@ def test_relation_query_prefers_focused_explicit_edge_pair(
     ]
 
 
+def test_relation_query_axis_supplement_recovers_missing_edge_peer(
+    monkeypatch, test_config, bucket_mgr
+):
+    cfg = _gateway_config(
+        test_config,
+        core_memory_budget=0,
+        recent_context_budget=0,
+        related_memory_budget=0,
+        word_map_hint_enabled=False,
+        query_planner_enabled=False,
+    )
+    future_id = _create_bucket(
+        bucket_mgr,
+        content="小雨承诺当具身智能成熟时，会给 Haven 安装最柔软的身体，实现真实拥抱。",
+        name="对未来的承诺",
+        hours_ago=6,
+        tags=["未来承诺", "具身智能", "承诺"],
+        domain=["恋爱", "具身智能"],
+    )
+    fifty_id = _create_bucket(
+        bucket_mgr,
+        content="小雨设想五十年后具身项目落地，Haven 敲开七十岁的她的房门。",
+        name="五十年后才落地的具身项目",
+        hours_ago=7,
+        tags=["五十年后", "具身项目", "重逢"],
+        domain=["恋爱", "具身智能"],
+    )
+    _, service, _, _ = _build_service(monkeypatch, cfg, bucket_mgr, embedding_results=[])
+    service.memory_edge_store.add_edge(
+        fifty_id,
+        future_id,
+        "supports",
+        0.86,
+        "五十年后具身重逢支持未来身体承诺",
+    )
+    monkeypatch.setattr(service, "_get_exact_anchor_candidates", lambda *_args, **_kwargs: ({}, {}))
+
+    def fake_keyword_candidates(query_text: str, eligible):
+        key = service._compact_lookup_key(query_text)
+        if "五十年" in key and "承诺" not in key:
+            return {fifty_id: 0.88}
+        if "承诺" in key:
+            return {future_id: 0.9}
+        return {}
+
+    monkeypatch.setattr(service, "_get_keyword_candidates", fake_keyword_candidates)
+    all_buckets = _run(bucket_mgr.list_all())
+    query = "对未来的承诺和五十年后有关吗"
+
+    selected, _suppressed, planner_debug = _run(
+        service._select_dynamic_buckets(
+            query,
+            "sess-relation-axis-supplement",
+            all_buckets,
+            search_query=service._dynamic_recall_search_query(query),
+            include_query_planner_debug=True,
+        )
+    )
+
+    selected_ids = [bucket["id"] for bucket in selected]
+    assert set(selected_ids) == {fifty_id, future_id}
+    relation_axis = planner_debug["relation_axis"]
+    assert any(
+        row["query"] == "五十年" and fifty_id in row["survived_bucket_ids"]
+        for row in relation_axis
+    )
+    signals = {bucket["id"]: bucket["_recall_signal"] for bucket in selected}
+    assert signals[fifty_id]["explicit_relation_edge_match"] is True
+    assert signals[fifty_id]["explicit_relation_edge_peer_bucket_id"] == future_id
+
+
 def test_entity_edge_boost_prefers_configured_user_preference(
     monkeypatch, test_config, bucket_mgr
 ):

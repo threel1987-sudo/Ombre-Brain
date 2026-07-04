@@ -12066,6 +12066,7 @@ class GatewayService:
                 "bucket_ids": [],
                 "terms": [],
             },
+            "relation_axis": [],
             "errors": [],
             "model": self.query_planner_model,
             "model_source": "dehydration" if self.query_planner_uses_dehydrator else "gateway",
@@ -12090,6 +12091,26 @@ class GatewayService:
             "activated_axis_multi": bool(getattr(plan, "activated_axis_multi", False)),
             "specific_terms": list(getattr(plan, "specific_terms", ()) or ()),
         }
+
+    def _relation_axis_supplemental_queries(self, query: str) -> list[dict[str, Any]]:
+        if not self.recall_policy.has_axis_relation_marker(query):
+            return []
+        plan = self._recall_query_plan(query)
+        if not bool(getattr(plan, "activated_axis_multi", False)):
+            return []
+        output: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for group in (getattr(plan, "activated_axis_groups", ()) or ())[:6]:
+            terms = self._planner_lexical_match_terms(list(group or ()))
+            if not terms:
+                continue
+            short_query = " ".join(terms).strip()
+            key = self._compact_lookup_key(short_query)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            output.append({"query": short_query, "must_terms": terms})
+        return output[:4]
 
     @staticmethod
     def _add_timing_ms(target: dict[str, Any] | None, name: str, started_at: float) -> None:
@@ -13200,6 +13221,69 @@ class GatewayService:
         selected_items = list(direct_selected)
         self._add_timing_ms(timing_debug, "direct.pick_cards", stage_started_at)
 
+        relation_axis_queries = (
+            []
+            if self._items_have_explicit_relation_pair(direct_selected)
+            else self._relation_axis_supplemental_queries(query)
+        )
+        if relation_axis_queries:
+            relation_axis_items: list[dict] = []
+            for index, axis_query in enumerate(relation_axis_queries):
+                short_query = axis_query["query"]
+                must_terms = list(axis_query.get("must_terms") or [])
+                stage_started_at = time.perf_counter()
+                admitted, suppressed = await self._dynamic_bucket_candidate_items(
+                    short_query,
+                    session_id,
+                    all_buckets,
+                    search_query=self._normalized_recall_query(short_query),
+                    required_terms=must_terms,
+                    planner_query={
+                        "query": short_query,
+                        "must_terms": must_terms,
+                        "source": "relation_axis",
+                    },
+                    allow_semantic=False,
+                    allow_semantic_session_dedupe=allow_semantic_session_dedupe,
+                    allow_rerank=False,
+                    timing_debug=timing_debug,
+                    timing_prefix=f"relation_axis_{index}",
+                )
+                self._add_timing_ms(
+                    timing_debug,
+                    f"relation_axis_{index}.candidate_items_total",
+                    stage_started_at,
+                )
+                relation_axis_items.extend(admitted)
+                suppressed_candidates.extend(suppressed)
+                stage_started_at = time.perf_counter()
+                self._merge_word_map_hint_debug(planner_debug, admitted + suppressed)
+                self._merge_exact_anchor_debug(planner_debug, admitted + suppressed)
+                planner_debug["relation_axis"].append(
+                    {
+                        "query": short_query,
+                        "must_terms": must_terms,
+                        "survived_bucket_ids": [
+                            str((item.get("bucket") or {}).get("id") or "")
+                            for item in admitted
+                            if (item.get("bucket") or {}).get("id")
+                        ],
+                        "suppressed_bucket_ids": [
+                            str((item.get("bucket") or {}).get("id") or "")
+                            for item in suppressed
+                            if (item.get("bucket") or {}).get("id")
+                        ],
+                    }
+                )
+                self._add_timing_ms(timing_debug, f"relation_axis_{index}.debug_merge", stage_started_at)
+            if relation_axis_items:
+                stage_started_at = time.perf_counter()
+                merged_items = self._merge_dynamic_bucket_items(selected_items + relation_axis_items, query)
+                merged_items = self._boost_explicit_relation_edge_bucket_items(query, merged_items)
+                merged_items.sort(key=lambda item: self._bucket_final_candidate_rank(query, item))
+                selected_items = self._pick_dynamic_cards(merged_items, query=query)
+                self._add_timing_ms(timing_debug, "relation_axis.pick_cards", stage_started_at)
+
         stage_started_at = time.perf_counter()
         trigger_reason = self._query_planner_trigger_reason(query, direct_selected)
         self._add_timing_ms(timing_debug, "query_planner_trigger_check", stage_started_at)
@@ -13280,10 +13364,10 @@ class GatewayService:
                         self._add_timing_ms(timing_debug, f"supplemental_{index}.debug_merge", stage_started_at)
                     if supplemental_items:
                         stage_started_at = time.perf_counter()
-                        selected_items = self._pick_dynamic_cards(
-                            self._merge_dynamic_bucket_items(selected_items + supplemental_items, query),
-                            query=query,
-                        )
+                        merged_items = self._merge_dynamic_bucket_items(selected_items + supplemental_items, query)
+                        merged_items = self._boost_explicit_relation_edge_bucket_items(query, merged_items)
+                        merged_items.sort(key=lambda item: self._bucket_final_candidate_rank(query, item))
+                        selected_items = self._pick_dynamic_cards(merged_items, query=query)
                         self._add_timing_ms(timing_debug, "supplemental.pick_cards", stage_started_at)
                 else:
                     planner_debug["skip_reason"] = "planner_returned_no_search"
@@ -13311,6 +13395,23 @@ class GatewayService:
         bucket = dict(item.get("bucket") or {})
         bucket["_recall_signal"] = self._bucket_candidate_recall_signal(item)
         return bucket
+
+    @staticmethod
+    def _items_have_explicit_relation_pair(items: list[dict]) -> bool:
+        bucket_ids = {
+            str((item.get("bucket") or {}).get("id") or "")
+            for item in items or []
+            if isinstance(item, dict) and (item.get("bucket") or {}).get("id")
+        }
+        if len(bucket_ids) < 2:
+            return False
+        for item in items or []:
+            if not isinstance(item, dict) or not item.get("explicit_relation_edge_match"):
+                continue
+            peer_id = str(item.get("explicit_relation_edge_peer_bucket_id") or "")
+            if peer_id and peer_id in bucket_ids:
+                return True
+        return False
 
     def _bucket_candidate_recall_signal(self, item: dict) -> dict:
         return {
