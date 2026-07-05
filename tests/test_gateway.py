@@ -4822,6 +4822,48 @@ def test_gateway_operit_context_rewrite_keeps_bare_care_memo_activity(
     assert user_content.endswith("Current user message:\n我写完作业了")
 
 
+def test_gateway_operit_context_rewrite_debug_distinguishes_system_rolecard(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    _, service, _, _ = _build_service(
+        monkeypatch,
+        _gateway_config(
+            test_config,
+            operit_context_rewrite_enabled=True,
+            recent_context_budget=0,
+            current_inner_state_interval_rounds=0,
+        ),
+        bucket_mgr,
+        embedding_results=[],
+    )
+    system_content = "【角色卡】\nHaven 的固定角色设定在 system 里。"
+    operit_extra = (
+        ' <attachment id="message_insert_extra_bundle_177757652231" '
+        'filename="Time:02:58 01/2026/6" type="text/plain" size="104">'
+        "【当前时间】\n2026-06-01 02:58:42 时区: Asia/Shanghai\n"
+        "</attachment>"
+    )
+    payload = {
+        "model": "test-model",
+        "messages": [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": "继续" + operit_extra},
+        ],
+    }
+
+    _, _, debug = _run(service.prepare_payload(deepcopy(payload), "sess-operit-debug", include_debug=True))
+
+    rewrite_debug = debug["prepare_timing_debug"]["operit_context_rewrite"]
+    assert rewrite_debug["incoming_roles"] == ["system", "user"]
+    assert rewrite_debug["incoming_system_count"] == 1
+    assert rewrite_debug["incoming_system_chars"] == len(system_content)
+    assert rewrite_debug["incoming_operit_titles"] == ["角色卡", "当前时间"]
+    assert rewrite_debug["operit_stable_titles"] == []
+    assert rewrite_debug["operit_activity_titles"] == ["当前时间"]
+
+
 def test_gateway_operit_context_rewrite_allows_prior_tool_protocol(
     monkeypatch,
     test_config,

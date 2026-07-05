@@ -16050,6 +16050,12 @@ class GatewayService:
             "activity_chars": 0,
             "cleaned_message_count": 0,
             "dropped_message_count": 0,
+            "incoming_roles": [],
+            "incoming_system_chars": 0,
+            "incoming_system_count": 0,
+            "incoming_operit_titles": [],
+            "operit_stable_titles": [],
+            "operit_activity_titles": [],
         }
 
     def _rewrite_operit_context_for_forward(
@@ -16063,6 +16069,7 @@ class GatewayService:
         if not isinstance(messages, list) or not messages:
             debug["skip_reason"] = "invalid_messages"
             return messages, "", "", debug
+        debug.update(self._operit_incoming_debug(messages))
         current_user_index = self._current_turn_user_index(messages)
         if self._messages_are_tool_continuation(messages, current_user_index):
             debug["skip_reason"] = "tool_protocol"
@@ -16116,7 +16123,50 @@ class GatewayService:
         debug["applied"] = True
         debug["stable_chars"] = len(stable_context)
         debug["activity_chars"] = len(activity_context)
+        debug["operit_stable_titles"] = self._operit_part_titles(stable_parts)
+        debug["operit_activity_titles"] = self._operit_part_titles(activity_parts)
         return rewritten, stable_context, activity_context, debug
+
+    def _operit_incoming_debug(self, messages: list[dict]) -> dict[str, Any]:
+        roles: list[str] = []
+        titles: list[str] = []
+        system_chars = 0
+        system_count = 0
+        for message in messages or []:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "")
+            roles.append(role)
+            text = self._coerce_message_text(message.get("content"))
+            if role == "system":
+                system_count += 1
+                system_chars += len(text)
+            titles.extend(self._operit_titles_from_text(text))
+        return {
+            "incoming_roles": roles[:80],
+            "incoming_system_chars": system_chars,
+            "incoming_system_count": system_count,
+            "incoming_operit_titles": self._unique_strings(titles),
+        }
+
+    @staticmethod
+    def _unique_strings(values: list[str]) -> list[str]:
+        unique: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            cleaned = str(value or "").strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            unique.append(cleaned)
+        return unique
+
+    def _operit_part_titles(self, parts: list[str]) -> list[str]:
+        titles: list[str] = []
+        for part in parts or []:
+            part_text = str(part or "").strip()
+            titles.extend(self._operit_titles_from_text(part_text))
+        return self._unique_strings(titles)
 
     def _messages_are_tool_continuation(
         self,
@@ -16184,6 +16234,19 @@ class GatewayService:
             or "<workspace_attachment" in lowered
             or ('filename="time:' in lowered and "<attachment" in lowered)
         )
+
+    def _operit_titles_from_text(self, text: str) -> list[str]:
+        raw = str(text or "")
+        titles = [
+            match.group(1).strip()
+            for match in re.finditer(r"【([^】\n]{1,80})】", raw)
+            if match.group(1).strip()
+        ]
+        if "<workspace_attachment" in raw.lower():
+            titles.append("工作区")
+        if self._text_contains_operit_activity_marker(raw):
+            titles.append("照顾备忘")
+        return self._unique_strings(titles)
 
     @staticmethod
     def _text_contains_operit_activity_marker(text: str) -> bool:
