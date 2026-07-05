@@ -654,7 +654,11 @@ def test_dashboard_exposes_gateway_upstream_editor():
     assert "function collectGatewayUpstreamsForSave(includeKeyValues)" in html
     assert "gatewayUpstreams = (((cfg.gateway || {}).upstreams) || []).map(normalizeGatewayUpstream);" in load_block
     assert "var keyValuesText = upstream.api_key_values.join('\\n');" in html
-    assert 'id="cfg-upstream-key-values-\' + index + \'" placeholder="可选：一行一个真实 key，对应上面的 env 名">\' + esc(keyValuesText) + \'</textarea>' in html
+    assert "function updateGatewayKeyValueCount(index)" in html
+    assert "updateGatewayKeyValueCount(index);" in html
+    assert 'oninput="updateGatewayKeyValueCount(' in html
+    assert 'id="cfg-upstream-key-values-count-\' + index + \'"' in html
+    assert "当前读取: ' + splitSecretLines(keyValuesText).length + ' 行" in html
     assert "upstream.api_key_values = [];" in html
     assert "var upstreamKeyValueCounts = [];" in save_block
     assert "missingKeyValueProviders.push(upstream.name || '未命名上游');" in save_block

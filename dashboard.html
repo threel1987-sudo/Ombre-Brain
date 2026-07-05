@@ -7318,6 +7318,15 @@ function splitSecretLines(value) {
     .filter(Boolean);
 }
 
+function updateGatewayKeyValueCount(index) {
+  var input = document.getElementById('cfg-upstream-key-values-' + index);
+  var counter = document.getElementById('cfg-upstream-key-values-count-' + index);
+  if (!counter) return 0;
+  var count = splitSecretLines(input ? input.value : '').length;
+  counter.textContent = '当前读取: ' + count + ' 行';
+  return count;
+}
+
 function syncGatewayUpstreamsFromDom() {
   var list = document.getElementById('cfg-upstreams-list');
   if (!list) return;
@@ -7332,6 +7341,7 @@ function syncGatewayUpstreamsFromDom() {
     current.base_url = value('cfg-upstream-url-' + index).trim();
     current.api_key_envs = splitEnvLines(value('cfg-upstream-envs-' + index));
     current.api_key_values = splitSecretLines(value('cfg-upstream-key-values-' + index));
+    updateGatewayKeyValueCount(index);
     current.default_model = value('cfg-upstream-default-' + index).trim();
     current.prompt_cache = value('cfg-upstream-cache-' + index).trim();
     current.prompt_cache_retention = current.prompt_cache ? value('cfg-upstream-cache-retention-' + index).trim() : '';
@@ -7382,8 +7392,8 @@ function renderGatewayUpstreams() {
         '<div class="config-row"><label>Base URL</label><input type="text" id="cfg-upstream-url-' + index + '" placeholder="https://.../v1" value="' + escAttr(upstream.base_url) + '" /></div>' +
         '<div class="config-row"><label>Key envs</label><textarea id="cfg-upstream-envs-' + index + '" placeholder="OMBRE_GATEWAY_PROVIDER_API_KEY_1&#10;OMBRE_GATEWAY_PROVIDER_API_KEY_2">' + esc(envText) + '</textarea></div>' +
         '<div class="upstream-note">一行一个环境变量名。多 key 会按现有 Gateway 逻辑在可重试错误时切到下一个。</div>' +
-        '<div class="config-row"><label>Key values</label><textarea id="cfg-upstream-key-values-' + index + '" placeholder="可选：一行一个真实 key，对应上面的 env 名">' + esc(keyValuesText) + '</textarea></div>' +
-        '<div class="upstream-note">留空不改。只有点“应用并保存密钥到 .env”才会写入，并用于本次热更新。</div>' +
+        '<div class="config-row"><label>Key values</label><textarea id="cfg-upstream-key-values-' + index + '" oninput="updateGatewayKeyValueCount(' + index + ')" placeholder="可选：一行一个真实 key，对应上面的 env 名">' + esc(keyValuesText) + '</textarea></div>' +
+        '<div class="upstream-note">留空不改。只有点“应用并保存密钥到 .env”才会写入，并用于本次热更新。<span id="cfg-upstream-key-values-count-' + index + '" style="margin-left:8px;">当前读取: ' + splitSecretLines(keyValuesText).length + ' 行</span></div>' +
         '<div class="config-row"><label>Default</label><input type="text" id="cfg-upstream-default-' + index + '" placeholder="默认模型，可留空" value="' + escAttr(upstream.default_model) + '" /></div>' +
         '<div class="config-row"><label>Cache</label><select id="cfg-upstream-cache-' + index + '" onchange="updateGatewayCacheRetentionOptions(' + index + ')"><option value=""' + (!upstream.prompt_cache ? ' selected' : '') + '>none</option><option value="openai"' + (upstream.prompt_cache === 'openai' ? ' selected' : '') + '>openai</option><option value="anthropic"' + (upstream.prompt_cache === 'anthropic' ? ' selected' : '') + '>anthropic</option><option value="anthropic_explicit"' + (upstream.prompt_cache === 'anthropic_explicit' ? ' selected' : '') + '>anthropic_explicit</option></select></div>' +
         '<div class="upstream-note">中转站选择：OpenAI 兼容选 openai；Claude 官方/多数中转选 anthropic_explicit；只认顶层 cache_control 的中转选 anthropic。</div>' +
@@ -7398,6 +7408,9 @@ function renderGatewayUpstreams() {
         '</div>' +
       '</div>';
   }).join('');
+  gatewayUpstreams.forEach(function(_, index) {
+    updateGatewayKeyValueCount(index);
+  });
 }
 
 function addGatewayUpstream() {
