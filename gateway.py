@@ -164,6 +164,37 @@ EXACT_ANCHOR_COMPOUND_RE = re.compile(
 IDENTITY_NAME_INTENT_MARKERS = query_intent_terms("identity_name.intent_markers")
 IDENTITY_NAME_EVENT_MARKERS = query_intent_terms("identity_name.event_markers")
 DATE_RECALL_CHAT_MARKERS = query_intent_terms("date_recall.chat_markers")
+DATE_RECALL_ROLE_SENSITIVE_MARKERS = (
+    "谁说的",
+    "谁说过",
+    "谁说",
+    "谁提的",
+    "谁提过",
+    "谁提到",
+    "谁提",
+    "谁讲的",
+    "谁讲过",
+    "谁讲",
+    "谁问的",
+    "谁问",
+    "谁写的",
+    "谁写",
+    "谁发的",
+    "谁发",
+    "谁让",
+    "谁要",
+    "谁打算",
+    "是谁说的",
+    "是谁说",
+    "是谁提的",
+    "是谁提",
+    "原话",
+    "原文",
+    "当时怎么说",
+    "具体怎么说",
+    "怎么说的",
+)
+DATE_RECALL_ROLE_QUERY_SHELL_TERMS = frozenset(DATE_RECALL_ROLE_SENSITIVE_MARKERS)
 MEMORY_SENTINEL_RESIDUE_STOP_TERMS = query_intent_term_set("memory_sentinel.residue_stop_terms")
 MEMORY_SENTINEL_RESIDUE_PREFIXES = query_intent_terms("memory_sentinel.residue_prefixes")
 MEMORY_SENTINEL_SKIP_ONLY_TERMS = query_intent_term_set("memory_sentinel.skip_only_terms")
@@ -7136,6 +7167,7 @@ class GatewayService:
             "turn_count": 0,
             "turn_source": "",
             "bucket_count": 0,
+            "role_safe_transcript_required": False,
             "selected_turn_ids": [],
             "selected_bucket_ids": [],
         }
@@ -7161,8 +7193,14 @@ class GatewayService:
         date_key = hint["date"]
         start_at, end_at = self._date_recall_range(date_key)
         topic_terms = self._date_recall_topic_terms(query_text)
-        turns, turn_source = self._date_recall_turns_for_range(start_at, end_at, topic_terms)
-        include_buckets = bool(topic_terms) or not turns
+        role_safe_transcript_required = self._query_requires_role_safe_date_transcript(query_text)
+        turns, turn_source = self._date_recall_turns_for_range(
+            start_at,
+            end_at,
+            topic_terms,
+            match_assistant_text=role_safe_transcript_required,
+        )
+        include_buckets = (not role_safe_transcript_required) and (bool(topic_terms) or not turns)
         buckets = self._date_recall_buckets_for_date(all_buckets, date_key, topic_terms) if include_buckets else []
         buckets = buckets[: self.date_recall_max_buckets]
         bucket_ids = [str(bucket.get("id") or "") for bucket in buckets if bucket.get("id")]
@@ -7175,6 +7213,7 @@ class GatewayService:
                 "turn_count": len(turns),
                 "turn_source": turn_source,
                 "bucket_count": len(buckets),
+                "role_safe_transcript_required": role_safe_transcript_required,
                 "selected_turn_ids": [int(turn.get("id") or 0) for turn in turns],
                 "selected_bucket_ids": bucket_ids,
             }
@@ -7189,6 +7228,8 @@ class GatewayService:
         ]
         if topic_terms:
             lines.append("topic_filter: " + ", ".join(topic_terms[:8]))
+        if role_safe_transcript_required:
+            lines.append("speaker_policy: use transcript speaker labels only; do not infer speakers from summaries.")
         if turns:
             lines.append("chat_transcript:")
             for turn in reversed(turns):
@@ -7210,8 +7251,15 @@ class GatewayService:
         start_at: datetime,
         end_at: datetime,
         topic_terms: list[str],
+        *,
+        match_assistant_text: bool = False,
     ) -> tuple[list[dict[str, Any]], str]:
-        raw_turns = self._date_recall_raw_turns_for_range(start_at, end_at, topic_terms)
+        raw_turns = self._date_recall_raw_turns_for_range(
+            start_at,
+            end_at,
+            topic_terms,
+            match_assistant_text=match_assistant_text,
+        )
         if raw_turns:
             return raw_turns[: self.date_recall_max_turns], "raw_events"
         profile_id = str(getattr(self.persona_engine, "profile_id", "") or "default")
@@ -7226,7 +7274,11 @@ class GatewayService:
             turns = [
                 turn for turn in turns
                 if self._date_recall_text_has_topic_terms(
-                    str(turn.get("user_text") or "") + "\n" + str(turn.get("assistant_text") or ""),
+                    (
+                        str(turn.get("user_text") or "") + "\n" + str(turn.get("assistant_text") or "")
+                        if match_assistant_text
+                        else str(turn.get("user_text") or "")
+                    ),
                     topic_terms,
                 )
             ]
@@ -7237,6 +7289,8 @@ class GatewayService:
         start_at: datetime,
         end_at: datetime,
         topic_terms: list[str],
+        *,
+        match_assistant_text: bool = False,
     ) -> list[dict[str, Any]]:
         limit = max(self.date_recall_max_turns * 12, self.date_recall_max_turns * 4, 80)
         try:
@@ -7286,7 +7340,7 @@ class GatewayService:
             combined = str(row.get("user_text") or "") + "\n" + str(row.get("assistant_text") or "")
             if not combined.strip():
                 continue
-            topic_text = str(row.get("user_text") or "").strip() or combined
+            topic_text = combined if match_assistant_text else str(row.get("user_text") or "").strip() or combined
             if topic_terms and not self._date_recall_text_has_topic_terms(topic_text, topic_terms):
                 continue
             turns.append(row)
@@ -7364,7 +7418,25 @@ class GatewayService:
         )
         if plain_today_status:
             return False
-        return any(marker in text for marker in DATE_RECALL_CHAT_MARKERS)
+        if any(marker in text for marker in DATE_RECALL_CHAT_MARKERS):
+            return True
+        return self._query_has_explicit_date_topic(text)
+
+    def _query_has_explicit_date_topic(self, query: str) -> bool:
+        text = str(query or "").strip()
+        hint = self._query_date_recall_hint(text)
+        if not hint:
+            return False
+        if not re.search(r"\d", str(hint.get("label") or "")):
+            return False
+        return bool(self._date_recall_topic_terms(text))
+
+    def _query_requires_role_safe_date_transcript(self, query: str) -> bool:
+        compact = self._compact_lookup_key(query)
+        return any(
+            self._compact_lookup_key(marker) in compact
+            for marker in DATE_RECALL_ROLE_SENSITIVE_MARKERS
+        )
 
     def _query_date_recall_hint(self, query: str) -> dict[str, str] | None:
         text = str(query or "").strip()
@@ -7393,7 +7465,7 @@ class GatewayService:
 
     def _strip_date_recall_query_shell(self, query: str) -> str:
         text = strip_human_date_references(query)
-        shell_terms = date_recall_shell_terms(self.identity)
+        shell_terms = date_recall_shell_terms(self.identity) | DATE_RECALL_ROLE_QUERY_SHELL_TERMS
         for term in sorted(shell_terms, key=lambda item: len(str(item)), reverse=True):
             if str(term).strip():
                 text = text.replace(str(term), " ")

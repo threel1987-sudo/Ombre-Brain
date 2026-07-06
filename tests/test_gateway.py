@@ -8164,6 +8164,169 @@ def test_gateway_date_recall_accepts_human_date_formats(
     assert f"[bucket_id:{old_year_id}]" not in _joined_message_content(month_payload["messages"])
 
 
+def test_gateway_date_recall_accepts_bare_explicit_date_topic(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    cfg = _gateway_config(
+        test_config,
+        recent_context_budget=0,
+        recalled_memory_budget=500,
+        related_memory_budget=0,
+        inject_total_budget=1800,
+        current_inner_state_interval_rounds=0,
+        relationship_weather_interval_rounds=0,
+        favorite_memory_interval_rounds=0,
+        date_recall_enabled=True,
+        date_recall_budget=500,
+        date_recall_max_turns=2,
+        date_recall_max_buckets=2,
+    )
+    bucket_id = _create_bucket(
+        bucket_mgr,
+        content="蓝雨档案记录 2026.06.15 那天的独立测试话题。",
+        name="蓝雨档案",
+        hours_ago=1,
+        date="2026-06-15",
+    )
+    embedding_queries: list[str] = []
+    _, service, state_store, _ = _build_service(
+        monkeypatch,
+        cfg,
+        bucket_mgr,
+        embedding_results=[(bucket_id, 0.99)],
+        embedding_queries=embedding_queries,
+    )
+    state_store.record_success("sess-bare-date-topic", [], completed_at=datetime.now() - timedelta(minutes=5))
+
+    payload, recalled_ids, debug = _run(
+        service.prepare_payload(
+            {"messages": [{"role": "user", "content": "2026.06.15 蓝雨档案"}]},
+            "sess-bare-date-topic",
+            include_debug=True,
+        )
+    )
+    injected = _joined_message_content(payload["messages"])
+
+    assert service._query_requests_date_recall("2026.06.15 蓝雨档案") is True
+    assert service._query_requests_date_recall("昨天 蓝雨档案") is False
+    assert recalled_ids == [bucket_id]
+    assert embedding_queries == []
+    assert "Date Recall" in injected
+    assert "蓝雨档案" in injected
+    assert "Recalled Memory" not in injected
+    assert debug["date_recall_injected"] is True
+    assert debug["date_recall_bucket_ids"] == [bucket_id]
+    assert debug["query_planner_debug"]["skip_reason"] == "date_recall"
+
+
+def test_gateway_date_recall_role_sensitive_uses_transcript_not_bucket_summary(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    cfg = _gateway_config(
+        test_config,
+        recent_context_budget=0,
+        recalled_memory_budget=500,
+        related_memory_budget=0,
+        inject_total_budget=1800,
+        current_inner_state_interval_rounds=0,
+        relationship_weather_interval_rounds=0,
+        favorite_memory_interval_rounds=0,
+        date_recall_enabled=True,
+        date_recall_budget=620,
+        date_recall_max_turns=4,
+        date_recall_max_buckets=2,
+    )
+    cfg["identity"] = {
+        "ai_name": "Echo",
+        "user_name": "Rain",
+        "user_display_name": "Rain",
+        "user_aliases": [],
+    }
+    bucket_id = _create_bucket(
+        bucket_mgr,
+        content="蓝雨档案摘要说有人提出了这个话题，但摘要不能作为说话人证据。",
+        name="蓝雨档案",
+        hours_ago=1,
+        date="2026-06-15",
+    )
+    _, service, state_store, _ = _build_service(
+        monkeypatch,
+        cfg,
+        bucket_mgr,
+        embedding_results=[(bucket_id, 0.99)],
+    )
+    state_store.record_success("sess-role-safe-date", [], completed_at=datetime.now() - timedelta(minutes=5))
+
+    empty_payload, empty_ids, empty_debug = _run(
+        service.prepare_payload(
+            {"messages": [{"role": "user", "content": "2026.06.15 蓝雨档案是谁说的"}]},
+            "sess-role-safe-date-empty",
+            include_debug=True,
+        )
+    )
+
+    assert empty_ids == []
+    assert "Date Recall" not in _joined_message_content(empty_payload["messages"])
+    assert empty_debug["date_recall_debug"]["role_safe_transcript_required"] is True
+    assert empty_debug["date_recall_debug"]["skip_reason"] == "no_material"
+    assert empty_debug["date_recall_debug"]["selected_bucket_ids"] == []
+
+    created_at = datetime(2026, 6, 15, 20, 15, tzinfo=timezone(timedelta(hours=8))).astimezone(timezone.utc)
+    service.raw_event_store.ingest(
+        [
+            {
+                "source": "gateway",
+                "source_event_id": "test_profile:role-safe:1:user",
+                "role": "user",
+                "text": "蓝雨档案由我先提出来。",
+                "created_at": created_at.isoformat(timespec="seconds"),
+                "conversation_id": "role-safe",
+                "session_id": "role-safe",
+                "client": "unit-test",
+                "metadata": {"profile_id": "test_profile", "round_id": 1},
+            },
+            {
+                "source": "gateway",
+                "source_event_id": "test_profile:role-safe:1:assistant",
+                "role": "assistant",
+                "text": "我只负责整理蓝雨档案。",
+                "created_at": created_at.isoformat(timespec="seconds"),
+                "conversation_id": "role-safe",
+                "session_id": "role-safe",
+                "client": "unit-test",
+                "metadata": {"profile_id": "test_profile", "round_id": 1},
+            },
+        ],
+        source="gateway",
+    )
+
+    payload, recalled_ids, debug = _run(
+        service.prepare_payload(
+            {"messages": [{"role": "user", "content": "2026.06.15 蓝雨档案是谁说的"}]},
+            "sess-role-safe-date",
+            include_debug=True,
+        )
+    )
+    injected = _joined_message_content(payload["messages"])
+
+    assert recalled_ids == []
+    assert "Date Recall" in injected
+    assert "chat_transcript:" in injected
+    assert "Rain: 蓝雨档案由我先提出来。" in injected
+    assert "Echo: 我只负责整理蓝雨档案。" in injected
+    assert "memory_buckets:" not in injected
+    assert "摘要不能作为说话人证据" not in injected
+    assert debug["date_recall_injected"] is True
+    assert debug["date_recall_bucket_ids"] == []
+    assert debug["date_recall_debug"]["role_safe_transcript_required"] is True
+    assert debug["date_recall_debug"]["selected_bucket_ids"] == []
+    assert "蓝雨档案" in debug["date_recall_debug"]["topic_terms"]
+
+
 def test_gateway_date_name_query_uses_identity_event_recall_not_date_recall(
     monkeypatch, test_config, bucket_mgr
 ):
