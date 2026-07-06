@@ -9540,7 +9540,7 @@ class GatewayService:
         *,
         header: str | None = None,
     ) -> str:
-        header = header or self._direct_bucket_header(bucket, moment)
+        header = self._direct_bucket_brief_header(bucket, moment)
         meta = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
         title = self._moment_bucket_title(moment) or str(meta.get("name") or bucket.get("id") or "").strip()
         preview = self._bucket_opening_preview(bucket, max_chars=220)
@@ -9548,11 +9548,11 @@ class GatewayService:
             brief = f"{title}: {preview}"
         else:
             brief = title or preview
-        parts = [f"{header} bucket_brief", f"brief: {brief}" if brief else "brief:"]
+        parts = [header, f"brief: {brief}" if brief else "brief:"]
         block = "\n".join(parts)
         if count_tokens_approx(block) <= budget:
             return block
-        compact_parts = [f"{header} bucket_brief"]
+        compact_parts = [header]
         compact_brief = self._clip_text(brief, 160) if brief else ""
         compact_parts.append(f"brief: {compact_brief}" if compact_brief else "brief:")
         compact = "\n".join(compact_parts)
@@ -9875,6 +9875,18 @@ class GatewayService:
             f"[bucket_id:{bucket_id}] [moment_id:{moment.get('moment_id') or ''}] "
             f"{date_part} {section} {title}"
         ).strip()
+
+    def _direct_bucket_brief_header(self, bucket: dict, moment: dict) -> str:
+        bucket_id = str(bucket.get("id") or moment.get("bucket_id") or "")
+        moment_id = str(moment.get("moment_id") or "")
+        title = self._moment_bucket_title(moment) or str(
+            (bucket.get("metadata", {}) or {}).get("name") or bucket_id
+        )
+        parts = [f"[bucket_id:{bucket_id}]", f"[moment_id:{moment_id}]"]
+        parts.extend(self._bucket_date_meta_parts(bucket, moment))
+        if title:
+            parts.append(title)
+        return " ".join(part for part in parts if part).strip()
 
     @staticmethod
     def _rendered_bucket_content(bucket: dict) -> str:

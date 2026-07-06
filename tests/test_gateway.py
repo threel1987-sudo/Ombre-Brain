@@ -6245,7 +6245,11 @@ def test_gateway_weak_direct_hit_renders_bucket_brief_without_original_detail(
         query_text="有点像那个意象",
     )
 
-    assert "bucket_brief" in block
+    first_line = block.splitlines()[0]
+    assert "bucket_brief" not in block
+    assert " moment " not in first_line
+    assert " original " not in first_line
+    assert " fact " not in first_line
     assert "brief: 弱语义桶: 可用于 brief 的开头。" in block
     assert "matched_hint:" not in block
     assert "弱语义命中的那一小段提示" not in block
