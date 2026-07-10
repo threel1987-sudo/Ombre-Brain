@@ -1571,8 +1571,9 @@ async def _build_handoff_breath(max_tokens: int = 1200, session_id: str = "", de
         portrait_sections = {}
 
     user_portrait = str(portrait_sections.get("user") or "").strip()
-
+    persona_portrait = str(portrait_sections.get("persona") or "").strip()
     relationship_portrait = str(portrait_sections.get("relationship") or "").strip()
+    current_focus = str(portrait_sections.get("current_focus") or "").strip()
     portrait_recent_continuity = str(portrait_sections.get("recent_continuity") or "").strip()
     live_recent_continuity = _format_handoff_personal_recent_continuity(all_buckets, limit=3)
     if _handoff_recent_continuity_is_natural(portrait_recent_continuity):
@@ -1589,13 +1590,19 @@ async def _build_handoff_breath(max_tokens: int = 1200, session_id: str = "", de
         )
     if not recent_continuity:
         recent_continuity = _format_handoff_recent_continuity(all_buckets, limit=3)
+    recent_continuity = _remove_handoff_current_focus_overlap(
+        recent_continuity,
+        current_focus,
+    )
     self_anchor = _format_handoff_self_anchor(all_buckets, limit=1)
     anchors = _format_handoff_anchors(all_buckets, limit=2)
     care_memos = _format_handoff_care_memos(session_id=session_id, limit=3)
 
     self_anchor = _trim_text_to_token_budget(self_anchor, 220)
     user_portrait = _trim_text_to_token_budget(user_portrait, 220)
+    persona_portrait = _trim_text_to_token_budget(persona_portrait, 180)
     relationship_portrait = _trim_text_to_token_budget(relationship_portrait, 240)
+    current_focus = _trim_lines_to_token_budget(current_focus, 180)
     recent_continuity = _trim_lines_to_token_budget(recent_continuity, 650)
     care_memos = _trim_lines_to_token_budget(care_memos, 180)
     anchors = _trim_text_to_token_budget(anchors, 220)
@@ -1607,6 +1614,8 @@ async def _build_handoff_breath(max_tokens: int = 1200, session_id: str = "", de
             user_portrait
             or "No evidence-bound user portrait is available yet.",
         ),
+        ("AI Self Portrait", persona_portrait),
+        ("Current Focus", current_focus),
         (
             "Relationship Portrait",
             relationship_portrait
@@ -1900,6 +1909,34 @@ def _merge_handoff_recent_continuity(*blocks: str, max_lines: int = 5) -> str:
             if len(lines) >= max_lines:
                 return "\n".join(lines)
     return "\n".join(lines)
+
+
+def _handoff_context_line_key(line: str) -> str:
+    text = str(line or "").strip()
+    text = re.sub(
+        r"^-\s+\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?(?:\s*/\s*[^:]+)?\s*:\s*",
+        "",
+        text,
+    )
+    text = re.sub(r"\s*\((?:bucket_id|moment_id|session_id):[^)]*\)\s*$", "", text)
+    return re.sub(r"[\s，。；：、！？,.!?;:]+", "", text).lower()
+
+
+def _remove_handoff_current_focus_overlap(recent: str, current_focus: str) -> str:
+    focus_keys = [
+        _handoff_context_line_key(line)
+        for line in str(current_focus or "").splitlines()
+        if len(_handoff_context_line_key(line)) >= 8
+    ]
+    if not focus_keys:
+        return str(recent or "")
+    kept = []
+    for line in str(recent or "").splitlines():
+        key = _handoff_context_line_key(line)
+        if key and any(key == focus or key in focus or focus in key for focus in focus_keys):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def _handoff_recent_continuity_is_natural(block: str) -> bool:
@@ -9195,6 +9232,12 @@ async def _self_anchor_entry_payload() -> dict:
 
 async def _portrait_state_payload() -> dict:
     state = portrait_engine.load_state()
+    handoff_sections = {}
+    if hasattr(portrait_engine, "build_handoff_sections"):
+        try:
+            handoff_sections = portrait_engine.build_handoff_sections(max_recent_items=3)
+        except Exception as exc:
+            logger.warning("Portrait handoff preview failed: %s", exc)
     return {
         "state_path": getattr(portrait_engine, "state_path", ""),
         "enabled": bool(getattr(portrait_engine, "enabled", True)),
@@ -9206,6 +9249,7 @@ async def _portrait_state_payload() -> dict:
         "portrait": state.get("portrait", {}),
         "recent_activities": state.get("recent_activities", []),
         "recent_timeline": state.get("recent_timeline", []),
+        "current_focus": str(handoff_sections.get("current_focus") or ""),
         "stable_candidates": state.get("stable_candidates", []),
         "profile_fact_candidates": state.get("profile_fact_candidates", []),
         "self_anchor_entry": await _self_anchor_entry_payload(),
@@ -9515,6 +9559,113 @@ async def api_portrait_state_item_delete(request):
     if status == "conflict":
         return JSONResponse(result, status_code=409)
     return JSONResponse(result, status_code=400)
+
+
+def _portrait_mutation_response(result: dict):
+    from starlette.responses import JSONResponse
+
+    status = str(result.get("status") or "")
+    if status in {"updated", "unchanged"}:
+        return JSONResponse(result)
+    if status == "conflict":
+        return JSONResponse(result, status_code=409)
+    if status == "not_found":
+        return JSONResponse(result, status_code=404)
+    return JSONResponse(result, status_code=400)
+
+
+def _portrait_expected_revision(body: dict) -> int | None:
+    raw = body.get("expected_revision")
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+@mcp.custom_route("/api/portrait-state/stable", methods=["PUT"])
+async def api_portrait_stable_edit(request):
+    """Manually replace one stable portrait paragraph with optimistic locking."""
+    from starlette.responses import JSONResponse
+
+    err = _require_dashboard_auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "json body must be an object"}, status_code=400)
+    expected_revision = _portrait_expected_revision(body)
+    if expected_revision is None:
+        return JSONResponse({"error": "expected_revision is required"}, status_code=400)
+    locked = _bool_value(body.get("locked"), False) if "locked" in body else None
+    result = portrait_engine.edit_stable(
+        scope=str(body.get("scope") or ""),
+        text=str(body.get("text") or ""),
+        expected_revision=expected_revision,
+        locked=locked,
+    )
+    return _portrait_mutation_response(result)
+
+
+@mcp.custom_route("/api/portrait-state/stable/lock", methods=["POST"])
+async def api_portrait_stable_lock(request):
+    """Lock or unlock one stable portrait paragraph."""
+    from starlette.responses import JSONResponse
+
+    err = _require_dashboard_auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "json body must be an object"}, status_code=400)
+    expected_revision = _portrait_expected_revision(body)
+    if expected_revision is None or "locked" not in body:
+        return JSONResponse({"error": "expected_revision and locked are required"}, status_code=400)
+    result = portrait_engine.set_stable_lock(
+        scope=str(body.get("scope") or ""),
+        locked=_bool_value(body.get("locked"), False),
+        expected_revision=expected_revision,
+    )
+    return _portrait_mutation_response(result)
+
+
+@mcp.custom_route("/api/portrait-state/stable/rollback", methods=["POST"])
+async def api_portrait_stable_rollback(request):
+    """Restore one stable portrait history revision without discarding newer history."""
+    from starlette.responses import JSONResponse
+
+    err = _require_dashboard_auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "json body must be an object"}, status_code=400)
+    expected_revision = _portrait_expected_revision(body)
+    try:
+        target_revision = int(body.get("target_revision"))
+    except (TypeError, ValueError):
+        target_revision = None
+    if expected_revision is None or target_revision is None:
+        return JSONResponse(
+            {"error": "expected_revision and target_revision are required"},
+            status_code=400,
+        )
+    result = portrait_engine.rollback_stable(
+        scope=str(body.get("scope") or ""),
+        target_revision=target_revision,
+        expected_revision=expected_revision,
+    )
+    return _portrait_mutation_response(result)
 
 
 @mcp.custom_route("/api/portrait-state/reset", methods=["POST"])

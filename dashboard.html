@@ -2175,6 +2175,69 @@
     text-transform: uppercase;
     margin-bottom: 6px;
   }
+  .portrait-stable-editor textarea {
+    width: 100%;
+    min-height: 112px;
+    resize: vertical;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .portrait-stable-editor textarea:focus {
+    outline: none;
+    border-color: var(--border-strong);
+  }
+  .portrait-stable-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 7px;
+  }
+  .portrait-stable-actions button,
+  .portrait-history-row button {
+    min-height: 26px;
+    padding: 3px 9px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+  }
+  .portrait-stable-actions button:hover,
+  .portrait-history-row button:hover {
+    border-color: var(--border-strong);
+    color: var(--accent);
+  }
+  .portrait-stable-actions button.danger { color: var(--negative); }
+  .portrait-history {
+    margin-top: 8px;
+  }
+  .portrait-history summary {
+    color: var(--text-light);
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .portrait-history-row {
+    margin-top: 7px;
+    padding-top: 7px;
+    border-top: 1px solid rgba(168, 147, 132, 0.18);
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+  .portrait-history-text {
+    margin: 4px 0 6px;
+    color: var(--text);
+    white-space: pre-wrap;
+  }
   .portrait-row {
     padding: 7px 0;
     border-top: 1px solid rgba(168, 147, 132, 0.18);
@@ -3108,7 +3171,7 @@
     <div class="profile-toolbar">
       <div>
         <h2>Portrait State</h2>
-        <p>新窗口 handoff 当前使用的每日画像状态；只读，不写 profile_fact、anchor 或 Core Memory。</p>
+        <p>后台每天维护的换窗画像；只在 breath/handoff 开场恢复，不随普通对话逐轮注入。</p>
       </div>
       <div class="profile-actions">
         <button type="button" onclick="refreshPortraitView()">刷新</button>
@@ -3126,7 +3189,7 @@
     <div class="profile-toolbar">
       <div>
         <h2>Profile Facts</h2>
-        <p>证据化用户画像事实；Portrait Memory 只读这些事实，不自动写入。</p>
+        <p>旧画像事实卡仅保留作证据检查；不会再把原文直接拼进每轮上下文。</p>
       </div>
       <button type="button" onclick="loadProfileFacts()">刷新</button>
     </div>
@@ -4675,7 +4738,7 @@ function renderPortraitState(data) {
   var state = data || {};
   var portrait = state.portrait || {};
   summary.innerHTML = '<div class="portrait-state-meta">' +
-    '<span class="profile-chip">read only</span>' +
+    '<span class="profile-chip">auto maintained</span>' +
     portraitStatusChip('engine', state.enabled !== false) +
     portraitStatusChip('auto', state.auto_enabled !== false) +
     portraitStatusChip('auto initial', state.auto_initial_enabled === true) +
@@ -4686,9 +4749,11 @@ function renderPortraitState(data) {
   '</div>';
   content.innerHTML =
     renderPortraitSelfAnchor(state.self_anchor_entry) +
+    renderPortraitCurrentFocus(state.current_focus) +
     renderPortraitTimeline(state.recent_timeline, state.recent_activities) +
     '<div class="portrait-state-grid">' +
       renderPortraitScope('user', portrait.user || {}) +
+      renderPortraitScope('persona', portrait.persona || {}) +
       renderPortraitScope('relationship', portrait.relationship || {}) +
     '</div>' +
     '<div class="portrait-candidate-grid">' +
@@ -4716,6 +4781,16 @@ function renderPortraitSelfAnchor(entry) {
   '</section>';
 }
 
+function renderPortraitCurrentFocus(value) {
+  var rows = String(value || '').split(/\r?\n/).filter(Boolean).map(function(line) {
+    return { text: line };
+  });
+  return '<section class="portrait-scope portrait-current-focus">' +
+    '<div class="portrait-layer-title">Current Focus · handoff 实际注入</div>' +
+    renderPortraitRows(rows, '最近 7 天没有 current focus。') +
+  '</section>';
+}
+
 function renderPortraitTimeline(timeline, recentActivities) {
   var rows = portraitRows(timeline);
   var area = 'recent_timeline';
@@ -4735,16 +4810,9 @@ function renderPortraitTimeline(timeline, recentActivities) {
 function renderPortraitScope(scope, scopeState) {
   var labels = {
     user: 'User Portrait',
-    persona: 'Persona',
-    relationship: 'Relationship'
+    persona: 'Self Portrait',
+    relationship: 'Relationship Portrait'
   };
-  var stableRows = scopeState.stable ? [{
-    text: scopeState.stable,
-    evidence: scopeState.stable_evidence || [],
-    source_dates: scopeState.stable_source_dates || [],
-    source_date: scopeState.stable_source_date || '',
-    updated_at: scopeState.stable_updated_at || ''
-  }] : [];
   var midRows = scopeState.mid_term ? [{
     text: scopeState.mid_term,
     evidence: scopeState.mid_term_evidence || [],
@@ -4752,9 +4820,6 @@ function renderPortraitScope(scope, scopeState) {
     source_date: scopeState.mid_term_source_date || '',
     updated_at: scopeState.mid_term_updated_at || ''
   }] : [];
-  stableRows = stableRows.map(function(row) {
-    return withPortraitDelete(row, { area: 'portrait', scope: scope, layer: 'stable', text: row.text || '' });
-  });
   midRows = midRows.map(function(row) {
     return withPortraitDelete(row, { area: 'portrait', scope: scope, layer: 'mid_term', text: row.text || '' });
   });
@@ -4766,11 +4831,150 @@ function renderPortraitScope(scope, scopeState) {
   });
   return '<section class="portrait-scope">' +
     '<h3>' + esc(labels[scope] || scope) + '</h3>' +
-    renderPortraitLayer('stable', stableRows, '还没有 stable portrait。') +
+    '<div class="portrait-layer">' +
+      '<div class="portrait-layer-title">stable</div>' +
+      renderPortraitStableEditor(scope, scopeState) +
+    '</div>' +
     renderPortraitLayer('mid term', midRows, '还没有 mid-term portrait。') +
     renderPortraitLayer('staging pool', stagingRows, 'staging pool 为空。') +
     renderPortraitLayer('recent buffer', recentRows, 'recent buffer 为空。') +
   '</section>';
+}
+
+function renderPortraitStableEditor(scope, scopeState) {
+  var revision = Number(scopeState.stable_revision || 0);
+  var locked = scopeState.stable_locked === true;
+  var history = portraitRows(scopeState.stable_history).slice().reverse().slice(0, 8);
+  var id = 'portrait-stable-' + scope;
+  var meta = [
+    'revision ' + revision,
+    locked ? 'locked' : 'auto update',
+    scopeState.stable_source || '—',
+    scopeState.stable_updated_at || ''
+  ].filter(Boolean);
+  var historyHtml = history.length
+    ? '<details class="portrait-history"><summary>历史版本 ' + history.length + '</summary>' + history.map(function(row) {
+        var targetRevision = Number(row.revision || 0);
+        return '<div class="portrait-history-row">' +
+          '<div>revision ' + targetRevision + ' · ' + esc(row.source || 'unknown') + ' · ' + esc(row.updated_at || '') + '</div>' +
+          '<div class="portrait-history-text">' + esc(row.text || '') + '</div>' +
+          '<button type="button" onclick="rollbackPortraitStable(\'' + jsString(scope) + '\',' + targetRevision + ')">回退到这里</button>' +
+        '</div>';
+      }).join('') + '</details>'
+    : '';
+  return '<div class="portrait-stable-editor">' +
+    '<textarea id="' + escAttr(id) + '" placeholder="还没有 stable portrait。">' + esc(scopeState.stable || '') + '</textarea>' +
+    '<div class="portrait-stable-actions">' +
+      '<button type="button" onclick="savePortraitStable(\'' + jsString(scope) + '\')">保存</button>' +
+      '<button type="button" onclick="togglePortraitStableLock(\'' + jsString(scope) + '\',' + (locked ? 'false' : 'true') + ')">' + (locked ? '解锁自动更新' : '锁定') + '</button>' +
+      (scopeState.stable ? '<button type="button" class="danger" onclick="clearPortraitStable(\'' + jsString(scope) + '\')">清空</button>' : '') +
+      meta.map(function(part) { return '<span class="profile-chip">' + esc(part) + '</span>'; }).join('') +
+    '</div>' +
+    historyHtml +
+  '</div>';
+}
+
+function portraitScopeState(scope) {
+  return portraitState && portraitState.portrait && portraitState.portrait[scope] || {};
+}
+
+async function savePortraitStable(scope) {
+  var state = portraitScopeState(scope);
+  var input = document.getElementById('portrait-stable-' + scope);
+  var text = input ? input.value.trim() : '';
+  if (!text) {
+    setPortraitMaintainMessage('stable 不能为空；需要清空时请使用删除。', 'error');
+    return;
+  }
+  setPortraitMaintainMessage('保存 stable…', '');
+  try {
+    var res = await authFetch(BASE + '/api/portrait-state/stable', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        scope: scope,
+        text: text,
+        expected_revision: Number(state.stable_revision || 0)
+      })
+    });
+    if (!res) return;
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok) throw new Error(data.error || data.reason || '保存失败');
+    setPortraitMaintainMessage('stable 已保存。', 'ok');
+    await loadPortraitState();
+  } catch (e) {
+    setPortraitMaintainMessage('保存失败: ' + e.message, 'error');
+  }
+}
+
+async function togglePortraitStableLock(scope, locked) {
+  var state = portraitScopeState(scope);
+  try {
+    var res = await authFetch(BASE + '/api/portrait-state/stable/lock', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        scope: scope,
+        locked: locked,
+        expected_revision: Number(state.stable_revision || 0)
+      })
+    });
+    if (!res) return;
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok) throw new Error(data.error || data.reason || '更新失败');
+    setPortraitMaintainMessage(locked ? 'stable 已锁定。' : 'stable 已恢复后台自动更新。', 'ok');
+    await loadPortraitState();
+  } catch (e) {
+    setPortraitMaintainMessage('锁定状态更新失败: ' + e.message, 'error');
+  }
+}
+
+async function clearPortraitStable(scope) {
+  var state = portraitScopeState(scope);
+  if (!state.stable || !confirm('清空这段 stable portrait？当前文本会保留在历史版本里。')) return;
+  try {
+    var res = await authFetch(BASE + '/api/portrait-state/items', {
+      method: 'DELETE',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        confirm: 'DELETE',
+        area: 'portrait',
+        scope: scope,
+        layer: 'stable',
+        text: state.stable
+      })
+    });
+    if (!res) return;
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok) throw new Error(data.error || data.reason || '清空失败');
+    setPortraitMaintainMessage('stable 已清空，旧文本仍在历史版本里。', 'ok');
+    await loadPortraitState();
+  } catch (e) {
+    setPortraitMaintainMessage('清空失败: ' + e.message, 'error');
+  }
+}
+
+async function rollbackPortraitStable(scope, targetRevision) {
+  if (!confirm('回退 stable 到 revision ' + targetRevision + '？当前版本仍会保留在历史里。')) return;
+  var state = portraitScopeState(scope);
+  try {
+    var res = await authFetch(BASE + '/api/portrait-state/stable/rollback', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        scope: scope,
+        target_revision: Number(targetRevision),
+        expected_revision: Number(state.stable_revision || 0)
+      })
+    });
+    if (!res) return;
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok) throw new Error(data.error || data.reason || '回退失败');
+    setPortraitMaintainMessage('stable 已回退，并保留当前版本。', 'ok');
+    await loadPortraitState();
+  } catch (e) {
+    setPortraitMaintainMessage('回退失败: ' + e.message, 'error');
+  }
 }
 
 function renderPortraitLayer(title, rows, emptyText) {

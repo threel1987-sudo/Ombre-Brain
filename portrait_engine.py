@@ -61,7 +61,7 @@ PORTRAIT_PROMPT_TEMPLATE = """你是一个证据化记忆状态整理器，正�
   "rewrite_mid_term": [
     {{
       "scope": "user|persona|relationship",
-      "text": "最近几周的核心画像概括；一句话说清反复出现的模式，不拼接事件列表",
+      "text": "相对 stable 的近期变化；只写最近仍在发生、尚未沉淀为长期判断的 delta",
       "evidence": [{{"bucket_id": "证据桶id"}}],
       "confidence": 0.72
     }}
@@ -83,12 +83,13 @@ PORTRAIT_PROMPT_TEMPLATE = """你是一个证据化记忆状态整理器，正�
 - 先找证据里反复出现、未来换窗仍有用的模式，再写画像；只说明当天发生什么的内容放 add_recent 或 add_recent_activity。
 - user 回答“{user_display_name}近期稳定呈现的工作方式、偏好、边界或关心点是什么”；“最近在做什么”优先写 add_recent_activity。
 - relationship 回答“这段关系最近怎样被恢复、有哪些边界、协作方式或里程碑”；关系天气、撒娇、确认、互动模式优先写 relationship。不要把技术工作升格成象征、仪式或文学化解释。
-- persona 暂时只作内部候选；除非证据明确要求维护 {ai_name} 的第一人称锚点或回复姿态，否则优先维护 user 和 relationship。
+- persona 正式回答“{ai_name}怎样理解自己、正在形成怎样的回复姿态或自我边界”，与 user、relationship 一样需要每日检查维护。
 - add_recent_activity 只回答“{user_display_name}最近在做什么/推进什么/忙什么”，偏项目、生活事项、正在处理的问题。
 - initial_run=true 时，add_recent 和 add_recent_activity 只放真正短期/当天或最近几天观察；高置信、能跨窗口携带的观察放入 move_to_staging。每个 scope 尽量给 1-3 条 move_to_staging，证据不足时少写。
-- rewrite_mid_term 把一个 scope 维护成一条真正的画像判断：一句核心概括，体现反复模式，不输出多条近似碎片，不把事件原文串起来。
+- rewrite_mid_term 只维护相对 previous_portrait.stable 的近期 delta：一句话说清最近仍在发生、尚未沉淀为长期判断的变化；不要复述 stable，不输出多条近似碎片，不把事件原文串起来。
 - initial_run=true 且 user 或 relationship 有足够证据时，优先给对应 scope 输出 rewrite_mid_term，让 handoff 主画像可用。
-- rewrite_stable 把一个 scope 的长期画像维护成一整段，在 previous_portrait.stable 基础上增删改；只有跨多日反复出现或已经由 mid_term/staging 支撑、未来换窗仍有用时才写。
+- 每天都检查 user、persona、relationship 的 stable。stable_locked=true 的 scope 不得输出 rewrite_stable；未锁定且证据足以新增、修正或删除长期判断时，直接输出 rewrite_stable，不要只停在 stable_candidate。
+- rewrite_stable 把一个 scope 的长期画像维护成一整段，在 previous_portrait.stable 基础上增删改；只有跨多日反复出现或已经由 mid_term/staging 支撑、未来换窗仍有用时才写。没有实质变化时不要为了改写而改写。
 - 输出要克制：daily_summary 最多60字，add_recent 最多4条，add_recent_activity 最多3条，move_to_staging 最多8条，rewrite_mid_term 每个 scope 最多1条，rewrite_stable 每个 scope 最多1条；rewrite_mid_term text 最多80字，其他 text 最多160字。
 - profile_fact_candidate 只提候选，不确认、不写入长期 profile_fact。
 - stable_candidate 只提候选；如果证据足够更新 stable portrait，优先输出 rewrite_stable。
@@ -144,6 +145,8 @@ class DailyPortraitMaintainer:
         self.staging_pool_max = max(1, int(cfg.get("staging_pool_max", 24)))
         self.candidate_max = max(1, int(cfg.get("candidate_max", 40)))
         self.recent_timeline_max = max(self.recent_buffer_max, int(cfg.get("recent_timeline_max", 48)))
+        self.stable_history_max = max(1, int(cfg.get("stable_history_max", 20)))
+        self.current_focus_days = max(1, int(cfg.get("current_focus_days", 7)))
         self.base_url = (
             os.environ.get("OMBRE_PORTRAIT_BASE_URL", "")
             or cfg.get("base_url")
@@ -425,11 +428,13 @@ class DailyPortraitMaintainer:
                 if expected_text and self._norm(current) != self._norm(expected_text):
                     return {"status": "conflict", "reason": "text_mismatch"}
                 if layer == "stable":
-                    scope_state["stable"] = ""
-                    scope_state["stable_evidence"] = []
-                    scope_state["stable_source_dates"] = []
-                    scope_state["stable_source_date"] = ""
-                    scope_state["stable_updated_at"] = ""
+                    self._replace_stable(
+                        scope_state,
+                        text="",
+                        evidence=[],
+                        source_dates=[],
+                        source="manual",
+                    )
                 else:
                     scope_state["mid_term"] = ""
                     scope_state["mid_term_evidence"] = []
@@ -466,6 +471,189 @@ class DailyPortraitMaintainer:
             "text": removed.get("text", "") if isinstance(removed, dict) else "",
         }
 
+    def edit_stable(
+        self,
+        scope: str,
+        text: str,
+        expected_revision: int,
+        locked: bool | None = None,
+    ) -> dict:
+        state = self.load_state()
+        scope = str(scope or "").strip()
+        if scope not in PORTRAIT_SCOPES:
+            return {"status": "invalid", "reason": "invalid_scope"}
+        scope_state = state["portrait"][scope]
+        revision = int(scope_state.get("stable_revision") or 0)
+        try:
+            expected = int(expected_revision)
+        except (TypeError, ValueError):
+            return {"status": "invalid", "reason": "invalid_revision"}
+        if expected != revision:
+            return {"status": "conflict", "reason": "revision_mismatch", "revision": revision}
+        clean_text = str(text or "").strip()
+        if not clean_text:
+            return {"status": "invalid", "reason": "missing_text", "revision": revision}
+
+        changed = self._replace_stable(
+            scope_state,
+            text=clean_text,
+            evidence=scope_state.get("stable_evidence", []),
+            source_dates=scope_state.get("stable_source_dates", []),
+            source="manual",
+        )
+        lock_changed = False
+        if locked is not None:
+            next_locked = self._bool(locked, bool(scope_state.get("stable_locked")))
+            lock_changed = next_locked != bool(scope_state.get("stable_locked"))
+            scope_state["stable_locked"] = next_locked
+        if not changed and not lock_changed:
+            return {
+                "status": "unchanged",
+                "scope": scope,
+                "revision": int(scope_state.get("stable_revision") or 0),
+                "locked": bool(scope_state.get("stable_locked")),
+            }
+        state["updated_at"] = self._now_utc()
+        if lock_changed and not changed:
+            scope_state["stable_updated_at"] = state["updated_at"]
+        self.save_state(state)
+        return {
+            "status": "updated",
+            "scope": scope,
+            "revision": int(scope_state.get("stable_revision") or 0),
+            "locked": bool(scope_state.get("stable_locked")),
+        }
+
+    def set_stable_lock(self, scope: str, locked: bool, expected_revision: int) -> dict:
+        state = self.load_state()
+        scope = str(scope or "").strip()
+        if scope not in PORTRAIT_SCOPES:
+            return {"status": "invalid", "reason": "invalid_scope"}
+        scope_state = state["portrait"][scope]
+        revision = int(scope_state.get("stable_revision") or 0)
+        try:
+            expected = int(expected_revision)
+        except (TypeError, ValueError):
+            return {"status": "invalid", "reason": "invalid_revision"}
+        if expected != revision:
+            return {"status": "conflict", "reason": "revision_mismatch", "revision": revision}
+        next_locked = self._bool(locked, bool(scope_state.get("stable_locked")))
+        if next_locked == bool(scope_state.get("stable_locked")):
+            return {"status": "unchanged", "scope": scope, "revision": revision, "locked": next_locked}
+        scope_state["stable_locked"] = next_locked
+        scope_state["stable_updated_at"] = self._now_utc()
+        state["updated_at"] = scope_state["stable_updated_at"]
+        self.save_state(state)
+        return {"status": "updated", "scope": scope, "revision": revision, "locked": next_locked}
+
+    def rollback_stable(self, scope: str, target_revision: int, expected_revision: int) -> dict:
+        state = self.load_state()
+        scope = str(scope or "").strip()
+        if scope not in PORTRAIT_SCOPES:
+            return {"status": "invalid", "reason": "invalid_scope"}
+        scope_state = state["portrait"][scope]
+        revision = int(scope_state.get("stable_revision") or 0)
+        try:
+            expected = int(expected_revision)
+            target = int(target_revision)
+        except (TypeError, ValueError):
+            return {"status": "invalid", "reason": "invalid_revision"}
+        if expected != revision:
+            return {"status": "conflict", "reason": "revision_mismatch", "revision": revision}
+        if target == revision:
+            return {
+                "status": "unchanged",
+                "scope": scope,
+                "revision": revision,
+                "locked": bool(scope_state.get("stable_locked")),
+            }
+        target_row = next(
+            (
+                row
+                for row in scope_state.get("stable_history", [])
+                if isinstance(row, dict) and int(row.get("revision") or 0) == target
+            ),
+            None,
+        )
+        if not target_row:
+            return {"status": "not_found", "reason": "revision_not_found", "revision": revision}
+        self._replace_stable(
+            scope_state,
+            text=str(target_row.get("text") or ""),
+            evidence=target_row.get("evidence", []),
+            source_dates=target_row.get("source_dates", []),
+            source="rollback",
+        )
+        state["updated_at"] = self._now_utc()
+        self.save_state(state)
+        return {
+            "status": "updated",
+            "scope": scope,
+            "revision": int(scope_state.get("stable_revision") or 0),
+            "rolled_back_to": target,
+            "locked": bool(scope_state.get("stable_locked")),
+        }
+
+    def _replace_stable(
+        self,
+        scope_state: dict,
+        *,
+        text: str,
+        evidence: Any,
+        source_dates: Any,
+        source: str,
+    ) -> bool:
+        incoming_text = str(text or "").strip()
+        current_text = str(scope_state.get("stable") or "").strip()
+        incoming_evidence = self._dedupe_evidence(evidence)
+        incoming_dates = self._merge_source_dates([], source_dates)
+        now = self._now_utc()
+
+        if self._norm(incoming_text) == self._norm(current_text):
+            merged_evidence = self._dedupe_evidence(
+                list(scope_state.get("stable_evidence", []) or []) + incoming_evidence
+            )
+            merged_dates = self._merge_source_dates(
+                scope_state.get("stable_source_dates", []),
+                incoming_dates,
+            )
+            metadata_changed = (
+                merged_evidence != list(scope_state.get("stable_evidence", []) or [])
+                or merged_dates != list(scope_state.get("stable_source_dates", []) or [])
+            )
+            if metadata_changed:
+                scope_state["stable_evidence"] = merged_evidence
+                scope_state["stable_source_dates"] = merged_dates
+                scope_state["stable_source_date"] = merged_dates[0] if merged_dates else ""
+                scope_state["stable_updated_at"] = now
+            return False
+
+        revision = int(scope_state.get("stable_revision") or 0)
+        if current_text or revision > 0:
+            history = list(scope_state.get("stable_history", []) or [])
+            history.append(
+                {
+                    "revision": revision,
+                    "text": current_text,
+                    "evidence": self._dedupe_evidence(scope_state.get("stable_evidence", [])),
+                    "source_dates": self._merge_source_dates(
+                        [],
+                        scope_state.get("stable_source_dates", []),
+                    ),
+                    "updated_at": str(scope_state.get("stable_updated_at") or ""),
+                    "source": str(scope_state.get("stable_source") or ""),
+                }
+            )
+            scope_state["stable_history"] = history[-self.stable_history_max :]
+        scope_state["stable"] = incoming_text
+        scope_state["stable_evidence"] = incoming_evidence
+        scope_state["stable_source_dates"] = incoming_dates
+        scope_state["stable_source_date"] = incoming_dates[0] if incoming_dates else ""
+        scope_state["stable_updated_at"] = now
+        scope_state["stable_revision"] = revision + 1
+        scope_state["stable_source"] = source if source in {"model", "manual", "rollback"} else ""
+        return True
+
     def _find_row_index(self, rows: list, *, index: int | None, text: str) -> int | None:
         if index is not None and 0 <= index < len(rows):
             if not text:
@@ -480,13 +668,19 @@ class DailyPortraitMaintainer:
                     return idx
         return None
 
-    def build_handoff_sections(self, *, max_recent_items: int = 4) -> dict[str, str]:
+    def build_handoff_sections(
+        self,
+        *,
+        max_recent_items: int = 4,
+        now: datetime | None = None,
+    ) -> dict[str, str]:
         state = self.load_state()
         portrait = state.get("portrait", {}) if isinstance(state.get("portrait"), dict) else {}
         return {
             "user": self._format_scope_block(portrait.get("user", {})),
             "persona": self._format_scope_block(portrait.get("persona", {})),
             "relationship": self._format_scope_block(portrait.get("relationship", {})),
+            "current_focus": self._format_recent_activity_block(state, max_items=2, now=now),
             "recent_continuity": self._format_recent_continuity(state, max_items=max_recent_items),
             "state_path": self.state_path,
             "updated_at": str(state.get("updated_at") or ""),
@@ -1282,12 +1476,18 @@ class DailyPortraitMaintainer:
             scope_state["mid_term_updated_at"] = self._now_utc()
         for item in patch.get("rewrite_stable", []):
             scope_state = portrait[item["scope"]]
-            scope_state["stable"] = item["text"]
-            scope_state["stable_evidence"] = item["evidence"]
+            if bool(scope_state.get("stable_locked")):
+                continue
             source_dates = self._merge_source_dates([], item.get("source_dates", []))
-            scope_state["stable_source_dates"] = source_dates
-            scope_state["stable_source_date"] = source_dates[0] if source_dates else item.get("source_date", "")
-            scope_state["stable_updated_at"] = self._now_utc()
+            if not source_dates:
+                source_dates = self._merge_source_dates([], item.get("source_date", ""))
+            self._replace_stable(
+                scope_state,
+                text=item["text"],
+                evidence=item["evidence"],
+                source_dates=source_dates,
+                source="model",
+            )
         for item in patch.get("stable_candidate", []):
             self._upsert_candidate(state["stable_candidates"], item, date_key)
         for item in patch.get("profile_fact_candidate", []):
@@ -1490,13 +1690,36 @@ class DailyPortraitMaintainer:
     def _format_scope_block(self, scope_state: dict) -> str:
         if not isinstance(scope_state, dict):
             return ""
-        if str(scope_state.get("mid_term") or "").strip():
-            return f"Mid-term: {self._clip(scope_state['mid_term'], 160)}"
-        return ""
+        stable = str(scope_state.get("stable") or "").strip()
+        mid_term = str(scope_state.get("mid_term") or "").strip()
+        lines = []
+        if stable:
+            lines.append(f"Stable: {self._clip(stable, 160)}")
+        if mid_term and self._norm(mid_term) != self._norm(stable):
+            lines.append(f"Current delta: {self._clip(mid_term, 160)}")
+        return "\n".join(lines)
 
-    def _format_recent_activity_block(self, state: dict, *, max_items: int) -> str:
+    def _format_recent_activity_block(
+        self,
+        state: dict,
+        *,
+        max_items: int,
+        now: datetime | None = None,
+    ) -> str:
         rows = state.get("recent_activities", []) if isinstance(state.get("recent_activities"), list) else []
-        clean_rows = [row for row in rows if isinstance(row, dict) and str(row.get("text") or "").strip()]
+        today = self._local_now(now).date()
+        cutoff = today - timedelta(days=self.current_focus_days - 1)
+        clean_rows = []
+        for row in rows:
+            if not isinstance(row, dict) or not str(row.get("text") or "").strip():
+                continue
+            date_key = self._row_source_date(row)
+            try:
+                source_date = datetime.fromisoformat(date_key).date()
+            except (TypeError, ValueError):
+                continue
+            if cutoff <= source_date <= today:
+                clean_rows.append(row)
         clean_rows.sort(
             key=lambda row: (
                 self._row_source_date(row),
@@ -1919,6 +2142,9 @@ class DailyPortraitMaintainer:
                 "stable": (portrait.get(scope, {}) or {}).get("stable", ""),
                 "stable_evidence": (portrait.get(scope, {}) or {}).get("stable_evidence", [])[:8],
                 "stable_source_dates": (portrait.get(scope, {}) or {}).get("stable_source_dates", [])[:8],
+                "stable_locked": bool((portrait.get(scope, {}) or {}).get("stable_locked", False)),
+                "stable_revision": int((portrait.get(scope, {}) or {}).get("stable_revision", 0) or 0),
+                "stable_source": str((portrait.get(scope, {}) or {}).get("stable_source", "") or ""),
             }
             for scope in PORTRAIT_SCOPES
         }
@@ -2136,6 +2362,10 @@ class DailyPortraitMaintainer:
                     "stable_source_dates": [],
                     "stable_source_date": "",
                     "stable_updated_at": "",
+                    "stable_locked": False,
+                    "stable_revision": 0,
+                    "stable_source": "",
+                    "stable_history": [],
                 }
                 for scope in PORTRAIT_SCOPES
             },
@@ -2161,6 +2391,21 @@ class DailyPortraitMaintainer:
                 base[key] = value
             elif key in {"version", "updated_at", "last_run_date"}:
                 base[key] = str(value or "")
+        for scope in PORTRAIT_SCOPES:
+            scope_state = base["portrait"][scope]
+            scope_state["stable_locked"] = self._bool(scope_state.get("stable_locked"), False)
+            try:
+                scope_state["stable_revision"] = max(0, int(scope_state.get("stable_revision") or 0))
+            except (TypeError, ValueError):
+                scope_state["stable_revision"] = 0
+            source = str(scope_state.get("stable_source") or "")
+            scope_state["stable_source"] = source if source in {"model", "manual", "rollback"} else ""
+            history = scope_state.get("stable_history")
+            scope_state["stable_history"] = (
+                [row for row in history if isinstance(row, dict)][-self.stable_history_max :]
+                if isinstance(history, list)
+                else []
+            )
         return base
 
     def _drop_initial_daily_summaries(self, state: dict) -> None:

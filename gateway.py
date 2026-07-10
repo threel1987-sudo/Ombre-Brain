@@ -686,10 +686,13 @@ class GatewayService:
         self.word_map_store = word_map_store if word_map_store is not None else (
             WordMapStore(config) if self.word_map_hint_enabled else None
         )
-        self.portrait_memory_enabled = self._bool_config_value(
+        self.portrait_memory_configured_enabled = self._bool_config_value(
             self.gateway_cfg.get("portrait_memory_enabled"),
             False,
         )
+        # Legacy raw profile_fact/anchor injection is retired. Portrait state is
+        # restored once through breath(mode="handoff") instead of every turn.
+        self.portrait_memory_enabled = False
         self.portrait_memory_budget = max(120, int(self.gateway_cfg.get("portrait_memory_budget", 360)))
         self.portrait_memory_max_sources = max(
             1,
@@ -991,6 +994,8 @@ class GatewayService:
             "recall_fusion_mode": self.recall_fusion_mode,
             "word_map_hint_enabled": self.word_map_hint_enabled,
             "portrait_memory_enabled": self.portrait_memory_enabled,
+            "portrait_memory_configured_enabled": self.portrait_memory_configured_enabled,
+            "portrait_memory_retired": True,
             "portrait_memory_budget": self.portrait_memory_budget,
             "portrait_memory_max_sources": self.portrait_memory_max_sources,
             "portrait_memory_include_anchors": self.portrait_memory_include_anchors,
@@ -1476,8 +1481,12 @@ class GatewayService:
                 self.word_map_store = None
             updated.append("gateway.word_map_hint_enabled")
         if "portrait_memory_enabled" in payload:
-            self.portrait_memory_enabled = self._bool_config_value(payload["portrait_memory_enabled"], False)
-            self.gateway_cfg["portrait_memory_enabled"] = self.portrait_memory_enabled
+            self.portrait_memory_configured_enabled = self._bool_config_value(
+                payload["portrait_memory_enabled"],
+                False,
+            )
+            self.portrait_memory_enabled = False
+            self.gateway_cfg["portrait_memory_enabled"] = False
             updated.append("gateway.portrait_memory_enabled")
         if "portrait_memory_budget" in payload:
             self.portrait_memory_budget = max(120, int(payload["portrait_memory_budget"]))
@@ -7135,62 +7144,16 @@ class GatewayService:
 
     def _build_portrait_memory_block(self, all_buckets: list[dict]) -> tuple[str, dict[str, Any]]:
         debug = self._portrait_memory_debug_base()
-        if not self.portrait_memory_enabled:
-            debug["skip_reason"] = "disabled"
-            return "", debug
-
-        sources = self._select_portrait_memory_sources(all_buckets)
-        debug["source_count"] = len(sources)
-        debug["source_ids"] = [str(bucket.get("id") or "") for _role, bucket in sources if bucket.get("id")]
-        debug["source_roles"] = [
-            {
-                "bucket_id": str(bucket.get("id") or ""),
-                "role": role,
-            }
-            for role, bucket in sources
-            if bucket.get("id")
-        ]
-        if not sources:
-            debug["skip_reason"] = "no_sources"
-            return "", debug
-
-        cache_key, source_hash = self._portrait_memory_cache_key(sources)
-        debug["source_hash"] = source_hash
-        cached_key = self._portrait_memory_cache.get("key")
-        if cached_key == cache_key:
-            cached_debug = dict(self._portrait_memory_cache.get("debug") or {})
-            cached_debug["enabled"] = True
-            cached_debug["cache_hit"] = True
-            cached_debug["skip_reason"] = ""
-            return str(self._portrait_memory_cache.get("block") or ""), cached_debug
-
-        lines = [
-            "Read-only user portrait cache compiled from evidence-bound profile facts and selected long-term anchors.",
-            "Use quietly when relevant; do not treat this as Core Memory, and do not infer beyond these lines.",
-        ]
-        for role, bucket in sources:
-            line = self._portrait_memory_source_line(role, bucket)
-            if line:
-                lines.append(line)
-
-        block = self._trim_text("\n".join(lines), self.portrait_memory_budget)
-        debug["cache_hit"] = False
-        debug["generated_portrait_version"] = "portrait-v1-deterministic"
-        debug["token_estimate"] = count_tokens_approx(block)
-        if not block.strip():
-            debug["skip_reason"] = "empty_block"
-            return "", debug
-
-        self._portrait_memory_cache = {
-            "key": cache_key,
-            "block": block,
-            "debug": dict(debug),
-        }
-        return block, debug
+        debug["skip_reason"] = "retired_use_breath_handoff"
+        return "", debug
 
     def _portrait_memory_debug_base(self) -> dict[str, Any]:
         return {
-            "enabled": bool(getattr(self, "portrait_memory_enabled", False)),
+            "enabled": False,
+            "configured_enabled": bool(
+                getattr(self, "portrait_memory_configured_enabled", False)
+            ),
+            "retired": True,
             "cache_hit": False,
             "skip_reason": "",
             "source_count": 0,
@@ -7200,94 +7163,6 @@ class GatewayService:
             "token_estimate": 0,
             "generated_portrait_version": "",
         }
-
-    def _select_portrait_memory_sources(self, all_buckets: list[dict]) -> list[tuple[str, dict]]:
-        sources: list[tuple[str, dict]] = []
-        for bucket in all_buckets:
-            if not isinstance(bucket, dict):
-                continue
-            role = self._portrait_memory_source_role(bucket)
-            if role:
-                sources.append((role, bucket))
-
-        def source_sort_key(item: tuple[str, dict]) -> tuple[int, float, int, str]:
-            role, bucket = item
-            meta = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
-            role_rank = 2 if role == "profile_fact" else 1
-            confidence = self._safe_float(meta.get("confidence"), 0.0)
-            importance = int(meta.get("importance") or 0)
-            updated = str(meta.get("updated_at") or meta.get("last_active") or meta.get("created") or "")
-            return (role_rank, confidence, importance, updated)
-
-        sources.sort(key=source_sort_key, reverse=True)
-        return sources[: self.portrait_memory_max_sources]
-
-    def _portrait_memory_source_role(self, bucket: dict) -> str:
-        if self._is_self_anchor_recall_excluded_bucket(bucket):
-            return ""
-        meta = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
-        if meta.get("pinned") or meta.get("protected"):
-            return ""
-        if meta.get("resolved") or meta.get("digested") or meta.get("deprecated"):
-            return ""
-        if meta.get("active") is False:
-            return ""
-        tags = {str(tag).strip() for tag in meta.get("tags", []) or [] if str(tag).strip()}
-        if "profile_fact" in tags or meta.get("profile_kind"):
-            return "profile_fact"
-        if self.portrait_memory_include_anchors and meta.get("anchor"):
-            return "anchor"
-        return ""
-
-    def _portrait_memory_cache_key(self, sources: list[tuple[str, dict]]) -> tuple[str, str]:
-        rows = []
-        for role, bucket in sources:
-            meta = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
-            text = bucket_text_for_embedding(bucket)
-            content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-            rows.append(
-                {
-                    "id": str(bucket.get("id") or meta.get("id") or ""),
-                    "role": role,
-                    "updated_at": str(meta.get("updated_at") or meta.get("last_active") or meta.get("created") or ""),
-                    "content_hash": content_hash,
-                }
-            )
-        key_payload = {
-            "version": "portrait-v1-deterministic",
-            "budget": self.portrait_memory_budget,
-            "max_sources": self.portrait_memory_max_sources,
-            "include_anchors": self.portrait_memory_include_anchors,
-            "sources": rows,
-        }
-        key = json.dumps(key_payload, ensure_ascii=False, sort_keys=True)
-        source_hash = hashlib.sha256(json.dumps(rows, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
-        return key, source_hash
-
-    def _portrait_memory_source_line(self, role: str, bucket: dict) -> str:
-        meta = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
-        bucket_id = str(bucket.get("id") or meta.get("id") or "").strip()
-        text = bucket_text_for_embedding(bucket)
-        text = strip_display_temperature_sections(strip_temperature_meaning_lines(text))
-        text = re.sub(r"(?m)^(Title|Content):\s*", "", text)
-        text = self._clip_text(text, 260 if role == "anchor" else 320)
-        if not text:
-            text = self._clip_text(str(meta.get("name") or bucket_id), 160)
-        bits = [role]
-        if bucket_id:
-            bits.append(f"bucket_id:{bucket_id}")
-        confidence = meta.get("confidence")
-        if confidence is not None:
-            bits.append(f"confidence:{self._safe_float(confidence, 0.0):.2f}")
-        evidence = (
-            meta.get("evidence_bucket_id")
-            or meta.get("evidence_moment_id")
-            or meta.get("source_bucket_id")
-            or meta.get("source_moment_id")
-        )
-        if evidence:
-            bits.append(f"evidence:{evidence}")
-        return f"- [{' '.join(bits)}] {text}"
 
     async def _build_recent_context_block(
         self,

@@ -450,6 +450,8 @@ def load_config(config_path: str = None) -> dict:
             "recent_buffer_max": 24,
             "staging_pool_max": 24,
             "candidate_max": 40,
+            "stable_history_max": 20,
+            "current_focus_days": 7,
         },
         "dream": {
             "enabled": True,
