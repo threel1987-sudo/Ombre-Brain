@@ -265,8 +265,8 @@ raw_events:
 # 可选私有 canonical/alias 覆盖层。不要把个人 canonical 写进模板；
 # 请通过私有 YAML/JSON 文件或环境变量加载。
 identity_semantics:
-  enabled: false
-  private_config_path: ""             # or OMBRE_IDENTITY_SEMANTICS_PATH
+  enabled: true
+  private_config_path: "/app/identity_private.yaml"             # or OMBRE_IDENTITY_SEMANTICS_PATH
   min_confidence: 0.78
   evidence_tags: ["profile_fact", "ai_favorite", "favorite_memory"]
 
