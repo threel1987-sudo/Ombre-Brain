@@ -23,7 +23,6 @@ COPY dashboard.html .
 COPY dashboard_assets ./dashboard_assets
 COPY config.example.yaml ./config.yaml
 COPY identity_private.yaml .
-
 RUN chmod +x scripts/*.sh
 
 # Persistent mount point: bucket data
