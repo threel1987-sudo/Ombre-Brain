@@ -38,7 +38,7 @@ DAILY_CHAT_MEMORY_STRUCTURAL_TAGS = {
     "stable_preference",
 }
 DAILY_CHAT_MEMORY_ENTITY_HINTS = [
-    ("Haven Bridge", ["haven_bridge", "haven bridge", "bridge 记忆", "bridge 注入"]),
+    ("阿克 Bridge", ["阿克_bridge", "阿克 bridge", "bridge 记忆", "bridge 注入"]),
     ("Gateway", ["gateway", "网关"]),
     ("MCP", ["mcp"]),
     ("Codex", ["codex"]),
@@ -687,7 +687,7 @@ class ReflectionEngine:
         confidence = self._clamp(result.get("confidence", 0.55))
         importance = self._int_between(result.get("importance"), meta.get("importance", 5))
         if self._has_favorite_tag(tags) and not self._has_favorite_reason(bucket.get("content", "")):
-            tags = [tag for tag in tags if tag != "haven_favorite" and not str(tag).startswith("flavor_")]
+            tags = [tag for tag in tags if tag != "阿克_favorite" and not str(tag).startswith("flavor_")]
             logger.warning(
                 "Rejected favorite tags without reason during enrich / enrich 拒绝缺少喜欢原因的 favorite 标签: %s",
                 bucket_id,
@@ -4105,7 +4105,7 @@ class ReflectionEngine:
                 [
                     "ombre",
                     "gateway",
-                    "haven_bridge",
+                    "阿克_bridge",
                     "bridge",
                     "mcp",
                     "api",
@@ -4200,7 +4200,7 @@ class ReflectionEngine:
             return False
         meta = bucket.get("metadata", {})
         all_tags = {str(tag) for tag in tags}
-        emotional_tags = {"haven_favorite", "relationship_event", "commitment", "emotional_echo"}
+        emotional_tags = {"阿克_favorite", "relationship_event", "commitment", "emotional_echo"}
         arousal = self._clamp(meta.get("arousal", 0.3))
         requested = result.get("affect_anchor_needed")
         if isinstance(requested, str):
@@ -4214,7 +4214,7 @@ class ReflectionEngine:
         return (importance >= 8 and confidence >= 0.55 and arousal >= 0.45) or (arousal >= 0.65 and confidence >= 0.65)
 
     def _is_low_temperature_technical(self, bucket: dict, tags: set[str]) -> bool:
-        if tags & {"haven_favorite", "relationship_event", "emotional_echo"}:
+        if tags & {"阿克_favorite", "relationship_event", "emotional_echo"}:
             return False
         meta = bucket.get("metadata", {})
         text = " ".join(
@@ -4237,7 +4237,7 @@ class ReflectionEngine:
     @staticmethod
     def _has_favorite_tag(tags: list[str]) -> bool:
         return any(
-            str(tag) == "haven_favorite" or str(tag).startswith("flavor_")
+            str(tag) == "阿克_favorite" or str(tag).startswith("flavor_")
             for tag in tags
         )
 
