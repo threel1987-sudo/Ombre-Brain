@@ -42,8 +42,8 @@ SECTION_ALIASES = {
     "reflection": "reflection",
     "assistant_reflection": "reflection",
     "assistant reflection": "reflection",
-    "haven_reflection": "reflection",
-    "haven reflection": "reflection",
+    "阿克_reflection": "reflection",
+    "阿克 reflection": "reflection",
     "followup": "followup",
     "follow-up": "followup",
     "followup_log": "followup_log",
@@ -122,11 +122,11 @@ GENERIC_RETRIEVAL_ALIAS_KEYS = frozenset(
         "daily",
         "game",
         "games",
-        "haven",
+        "阿克",
         "note",
         "notes",
         "momentbucket",
-        "xiaoyu",
+        "阿澪",
         "\u4e8b\u60c5",
         "\u4e8b\u5b9e",
         "\u54e5\u54e5",
@@ -145,8 +145,8 @@ GENERIC_RETRIEVAL_ALIAS_KEYS = frozenset(
 )
 COMPACT_RETRIEVAL_ALIAS_PATTERNS = (
     re.compile(
-        r"^(?:\u5c0f\u96e8|haven|\u54e5\u54e5|\u6211|\u6211\u4eec)"
-        r"(?:\u548c|\u4e0e)(?:\u5c0f\u96e8|haven|\u54e5\u54e5|\u6211|\u6211\u4eec)"
+        r"^(?:\u5c0f\u96e8|阿克|\u54e5\u54e5|\u6211|\u6211\u4eec)"
+        r"(?:\u548c|\u4e0e)(?:\u5c0f\u96e8|阿克|\u54e5\u54e5|\u6211|\u6211\u4eec)"
         r"(?:\u5173\u4e8e|\u6709\u5173)?(.+?)(?:\u7684)?"
         r"(?:\u7ea6\u5b9a|\u5bf9\u8bdd|\u8bb0\u5fc6|\u8bb0\u5f55|\u4e8b\u60c5|\u7247\u6bb5)$",
         re.IGNORECASE,
@@ -157,14 +157,14 @@ COMPACT_RETRIEVAL_ALIAS_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
-        r"^(?:\u5c0f\u96e8|haven|\u54e5\u54e5|\u6211|\u6211\u4eec|\u5979|\u4ed6)"
+        r"^(?:\u5c0f\u96e8|阿克|\u54e5\u54e5|\u6211|\u6211\u4eec|\u5979|\u4ed6)"
         r"(?:\u66fe\u7ecf|\u5f53\u65f6|\u540e\u6765|\u73b0\u5728|\u4e00\u76f4)?"
         r"(?:\u8bf4\u8fc7|\u8bf4|\u89c9\u5f97|\u8ba4\u4e3a|\u8bb0\u5f97|\u5e0c\u671b|\u60f3\u8981|\u60f3|\u51b3\u5b9a|\u7ea6\u5b9a|\u559c\u6b22|\u63d0\u5230)"
         r"[\s,\uff0c:\uff1a]*(.+)$",
         re.IGNORECASE,
     ),
     re.compile(
-        r"^(?:xiaoyu|haven|i|we|she|he)\s+"
+        r"^(?:阿澪|阿克|i|we|she|he)\s+"
         r"(?:said|says|thought|thinks|wanted|wants|remembered|remembers|agreed|decided|mentioned)"
         r"\s+(?:that\s+)?(.+)$",
         re.IGNORECASE,
