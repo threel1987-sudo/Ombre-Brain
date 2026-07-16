@@ -70,8 +70,8 @@ FAVORITE_TAG = GENERIC_FAVORITE_TAG
 
 SUBJECT_ALIASES = {
     "user": WRITE_SUBJECT_USER,
-    "xiaoyu": WRITE_SUBJECT_USER,
-    "rain": WRITE_SUBJECT_USER,
+    "阿澪": WRITE_SUBJECT_USER,
+    "mio": WRITE_SUBJECT_USER,
     "person": WRITE_SUBJECT_USER,
     "profile": WRITE_SUBJECT_USER,
     "state": WRITE_SUBJECT_USER,
@@ -81,7 +81,7 @@ SUBJECT_ALIASES = {
     "relation": WRITE_SUBJECT_RELATIONSHIP,
     "ai": WRITE_SUBJECT_RELATIONSHIP,
     "assistant": WRITE_SUBJECT_RELATIONSHIP,
-    "haven": WRITE_SUBJECT_RELATIONSHIP,
+    "阿克": WRITE_SUBJECT_RELATIONSHIP,
     "event": WRITE_SUBJECT_EVENT,
     "process": WRITE_SUBJECT_EVENT,
     "project": WRITE_SUBJECT_EVENT,
@@ -190,7 +190,7 @@ LAYER_POLICIES: dict[str, MemoryLayerPolicy] = {
         layer=LAYER_FAVORITE,
         direct_seed_policy=DIRECT_CONTENT,
         render_policy=RENDER_FAVORITE,
-        gateway_section="Haven Favorite Memory",
+        gateway_section="阿克 Favorite Memory",
         cooldown_policy="separate_budget",
         diffusion_policy=DIFFUSE_CAREFUL_SOURCE,
         preserves_original=True,
