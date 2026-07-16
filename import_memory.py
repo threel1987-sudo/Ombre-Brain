@@ -45,12 +45,12 @@ _MARKDOWN_USER_LABELS = {
     "human",
     "user",
     "me",
-    "rain",
+    "mio",
     "你",
     "我",
     "用户",
     "人类",
-    "小雨",
+    "阿澪",
 }
 _MARKDOWN_ASSISTANT_LABELS = {
     "assistant",
@@ -62,7 +62,7 @@ _MARKDOWN_ASSISTANT_LABELS = {
     "deepseek",
     "gemini",
     "qwen",
-    "haven",
+    "ake",
     "助手",
     "模型",
     "ai助手",
