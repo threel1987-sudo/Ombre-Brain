@@ -18,8 +18,8 @@
 #                   只读浮现久未触碰的旧记忆
 #       comment_bucket — Add a ring comment to a memory
 #                        给记忆追加年轮
-#       delete_bucket_comment — Delete one Haven-authored ring comment
-#                               删除一条 Haven 自己写的年轮
+#       delete_bucket_comment — Delete one 阿克-authored ring comment
+#                               删除一条 阿克 自己写的年轮
 #       hold   — Store a single memory
 #                存储单条记忆
 #       grow   — Long-note memory digest, auto-split selected content into buckets
@@ -2085,9 +2085,9 @@ _BASE_FAVORITE_REFLECTION_HEADINGS = {
     "喜欢的原因",
 }
 _LEGACY_FAVORITE_REFLECTION_HEADINGS = {
-    "havenreflection",
-    "haven喜欢它的原因",
-    "haven喜欢的原因",
+    "reflection",
+    "阿克喜欢它的原因",
+    "阿克喜欢的原因",
 }
 
 
@@ -2157,7 +2157,7 @@ _GROW_DIRECT_SECTION_HEADINGS = {
     "original",
     "reflection",
     "assistantreflection",
-    "havenreflection",
+    "阿克reflection",
     "followup",
     "affectanchor",
 }
