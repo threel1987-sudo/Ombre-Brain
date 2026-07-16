@@ -338,7 +338,7 @@ DOMAIN_ALIASES = {
         "gateway",
         "ombre",
         "ombre-brain",
-        "haven_bridge",
+        "阿克_bridge",
         "bridge",
         "voice",
         "tts",
