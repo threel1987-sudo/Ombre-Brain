@@ -608,7 +608,7 @@ persona:
   # Optional pre-reply conflict scout. It is read-only and fail-soft: on a
   # confident conflict/withdrawal signal it injects one private anti-retreat
   # reminder, never a reply script or an action decision.
-  conflict_nudge_enabled: false
+  conflict_nudge_enabled: true
   conflict_nudge_context_turns: 3
   conflict_nudge_min_confidence: 0.55
   conflict_nudge_timeout_seconds: 4
@@ -625,7 +625,7 @@ persona:
     longing: 0.34
     security: 0.75
     protective_drive: 0.52
-    libido: 0.18                 # tone temperature only; never action or consent inference
+    libido: 0.65                 # tone temperature only; never action or consent inference
     mood_label: "warm_neutral"
     session_defensiveness: 0.12
     residue: ""
@@ -693,8 +693,8 @@ reflection:
     context: {}                    # e.g. role/title/category memories
     relationship: {}               # e.g. broader relationship/trust memories
     shared: {}                     # e.g. terms that count as overlap but do not decide edge direction
-  diary_mcp_url: ""               # optional diary MCP URL, e.g. http://127.0.0.1:8000/mcp
-  diary_mcp_token_env: ""         # optional bearer token env var name, e.g. MCP_BEARER_TOKEN
+  diary_mcp_url: "https://ake-diary-mcp.zeabur.app/mcp"               # optional diary MCP URL, e.g. http://127.0.0.1:8000/mcp
+  diary_mcp_token_env: "MCP_BEARER_TOKEN"         # optional bearer token env var name, e.g. MCP_BEARER_TOKEN
   diary_memory_extract_enabled: true
   diary_memory_extract_max_per_day: 1
   diary_memory_extract_min_confidence: 0.68
