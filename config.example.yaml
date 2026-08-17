@@ -647,10 +647,10 @@ reflection:
   enrich_backfill_enabled: true      # hourly scheduler backfills missing tags/confidence/edges
   enrich_backfill_limit: 5           # max buckets to backfill per scheduler tick
   edge_backfill_limit: 5             # default limit for manual edge_backfill; only writes memory_edges
-  base_url: ""                    # empty = embedding.base_url
-  model: ""                       # empty = persona/dehydration model
+  base_url: "https://api.siliconflow.cn/v1"                    # empty = embedding.base_url
+  model: "deepseek-ai/DeepSeek-V4-Flash"                       # empty = persona/dehydration model
   thinking_mode: ""               # empty = model default; disabled/enabled can force Qwen-style thinking
-  # api_key: ""                   # empty = OMBRE_REFLECTION_API_KEY or embedding.api_key
+  # api_key: "sk-zkemrwzwxvfhefytqdxeyohvubbzhscvantsytbxpaarmxcd"                   # empty = OMBRE_REFLECTION_API_KEY or embedding.api_key
   temperature: 0.1
   max_tokens: 700
   timezone: "Asia/Shanghai"
