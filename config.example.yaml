@@ -649,8 +649,8 @@ reflection:
   edge_backfill_limit: 5             # default limit for manual edge_backfill; only writes memory_edges
   base_url: "https://api.siliconflow.cn/v1"                    # empty = embedding.base_url
   model: "deepseek-ai/DeepSeek-V4-Flash"                       # empty = persona/dehydration model
-  thinking_mode: ""               # empty = model default; disabled/enabled can force Qwen-style thinking
-  # api_key: "sk-zkemrwzwxvfhefytqdxeyohvubbzhscvantsytbxpaarmxcd"                   # empty = OMBRE_REFLECTION_API_KEY or embedding.api_key
+  thinking_mode: "disabled"               # empty = model default; disabled/enabled can force Qwen-style thinking
+  # api_key: ""                   # empty = OMBRE_REFLECTION_API_KEY or embedding.api_key
   temperature: 0.1
   max_tokens: 700
   timezone: "Asia/Shanghai"
@@ -659,7 +659,7 @@ reflection:
   daily_conversation_turn_limit: 12 # small short-term turn window for daily impression material
   daily_chat_memory_mode: auto      # off = disabled; review = pending candidates; auto = write selected Gateway chat memories
   daily_chat_memory_hour: 0        # organize the previous day's Gateway chats after local midnight
-  daily_chat_memory_turn_limit: 0  # 0 = use all raw_events for that date; >0 caps restored turns
+  daily_chat_memory_turn_limit: 100  # 0 = use all raw_events for that date; >0 caps restored turns
   daily_chat_memory_max_per_day: 10 # cap for selected long-term memory candidates
   daily_chat_memory_min_confidence: 0.68 # auto-write threshold
   daily_chat_memory_review_max_per_day: 10 # review mode can surface more candidates without auto-writing them
@@ -669,7 +669,7 @@ reflection:
   daily_chat_memory_summary_stride_turns: 7     # start a new summary window every N turns
   daily_chat_memory_api_key_env: "" # optional; leave empty to use the dehydration model
   daily_chat_memory_base_url: ""    # optional; set with api_key_env/model only for a separate daily-chat model
-  daily_chat_memory_timeout_seconds: 180
+  daily_chat_memory_timeout_seconds: 600
   daily_chat_memory_summary_model: ""
   daily_chat_memory_summary_max_tokens: 2200
   daily_chat_memory_candidate_model: ""
