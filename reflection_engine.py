@@ -191,6 +191,7 @@ DAILY_CHAT_MEMORY_PROMPT_TEMPLATE = """这是 {user_display_name} 和 {ai_name} 
       "content": "长期记忆候选",
       "source_event_ids": [101, 102],
       "source_turn_ids": [1, 2]
+      "confidence": 0.72
     }
   ]
 }
@@ -3131,7 +3132,7 @@ class ReflectionEngine:
             title = str(candidate.get("title") or "").strip()
             if self._daily_chat_memory_low_value_episode(content, kind, title):
                 continue
-            confidence = self._clamp(candidate.get("confidence", 0.0))
+            confidence = self._clamp(candidate.get("confidence", 0.7))
             threshold = self.daily_chat_memory_min_confidence if min_confidence is None else min_confidence
             if confidence < threshold:
                 continue
@@ -4307,14 +4308,23 @@ class ReflectionEngine:
         )
 
     def _parse_json_object(self, raw: str) -> dict:
+        cleaned = (raw or "").strip()
+
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+
         try:
-            cleaned = raw.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
             parsed = json.loads(cleaned)
-        except (json.JSONDecodeError, IndexError, ValueError):
-            logger.warning("Reflection JSON parse failed: %s", raw[:200])
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "Reflection JSON parse failed: %s; chars=%s; tail=%r",
+                exc,
+                len(cleaned),
+                cleaned[-300:],
+            )
             return {}
+
         return parsed if isinstance(parsed, dict) else {}
 
     @staticmethod
