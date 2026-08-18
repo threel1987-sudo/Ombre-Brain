@@ -429,7 +429,7 @@ class ReflectionEngine:
         ).strip()
         self.daily_chat_memory_summary_max_tokens = max(
             300,
-            min(4000, int(cfg.get("daily_chat_memory_summary_max_tokens", 2200))),
+            min(4000, int(cfg.get("daily_chat_memory_summary_max_tokens", 4000))),
         )
         self.daily_chat_memory_candidate_model = str(
             cfg.get("daily_chat_memory_candidate_model")
@@ -438,7 +438,7 @@ class ReflectionEngine:
         ).strip()
         self.daily_chat_memory_candidate_max_tokens = max(
             300,
-            min(4000, int(cfg.get("daily_chat_memory_candidate_max_tokens", 3200))),
+            min(4000, int(cfg.get("daily_chat_memory_candidate_max_tokens", 4000))),
         )
         self.daily_activity_summary_enabled = bool(cfg.get("daily_activity_summary_enabled", True))
         self.daily_activity_summary_turn_limit = max(
