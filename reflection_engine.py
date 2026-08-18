@@ -236,9 +236,9 @@ DAILY_CHAT_MEMORY_SUMMARY_PROMPT_TEMPLATE = """你是 {ai_name} 的对话压缩�
 }
 
 规则：
-- 每个窗口最多输出 4 条 summary；每条围绕一个可能的长期记忆点。没有长期价值信号时返回 {"summaries": []}。
+- 每个窗口最多输出 2 条 summary；每条围绕一个可能的长期记忆点。没有长期价值信号时返回 {"summaries": []}。
 - summary 要能让下一步模型在不看完整原文时仍理解上下文，不要压成一句泛泛结论。
-- summary 通常 80 到 320 字；写清背景、因果、已确认内容、未完成点。不要输出 Markdown。
+- summary 通常 80 到 200 字；写清背景、因果、已确认内容、未完成点。不要输出 Markdown。
 - 如果信号出现在窗口开头或结尾，保留“前文可能已铺垫 / 后文可能继续确认”的边界提醒，不要把未确认因果说死。
 - source_event_ids / source_turn_ids 只能使用输入里真实出现的 id；拿不准可留空。
 - confidence 低于 0.5 的内容不要输出。
@@ -392,13 +392,13 @@ class ReflectionEngine:
         self.daily_chat_memory_summary_enabled = bool(cfg.get("daily_chat_memory_summary_enabled", True))
         self.daily_chat_memory_summary_window_turns = max(
             1,
-            min(200, int(cfg.get("daily_chat_memory_summary_window_turns", 14))),
+            min(200, int(cfg.get("daily_chat_memory_summary_window_turns", 5))),
         )
         self.daily_chat_memory_summary_stride_turns = max(
             1,
             min(
                 self.daily_chat_memory_summary_window_turns,
-                int(cfg.get("daily_chat_memory_summary_stride_turns", 7)),
+                int(cfg.get("daily_chat_memory_summary_stride_turns", 5)),
             ),
         )
         self.daily_chat_memory_api_key_env = str(
@@ -1763,7 +1763,7 @@ class ReflectionEngine:
         item: dict,
         *,
         key: str,
-        window_index: int,
+        _index: int,
         source_turn_ids: list[int],
         source_event_ids: list[int],
     ) -> dict:
@@ -1792,7 +1792,7 @@ class ReflectionEngine:
         ] or source_event_ids
         signals = self._string_list(item.get("signals"), limit=8)
         return {
-            "window_index": window_index,
+            "_index": _index,
             "title": title[:40],
             "summary": text[:900],
             "signals": signals,
@@ -1987,7 +1987,7 @@ class ReflectionEngine:
         if not conversation_turn_store and not raw_event_store:
             return {"status": "skipped", "reason": "no_conversation_source"}
 
-        start, end = self._period_window("daily", now_local)
+        start, end = self._period_("daily", now_local)
         profile_id = str(getattr(persona_engine, "profile_id", "") or "default")
         turns, turn_source = self._daily_activity_summary_turns(
             profile_id=profile_id,
@@ -2120,7 +2120,7 @@ class ReflectionEngine:
         model = str(model_override or "").strip() or (
             self.daily_chat_memory_summary_model if use_daily_client else self.model
         )
-        fallback_turn_ids, fallback_event_ids = self._daily_chat_memory_window_source_ids(turns)
+        fallback_turn_ids, fallback_event_ids = self._daily_chat_memory__source_ids(turns)
         payload = {
             "date": key,
             "identity": {
@@ -2227,7 +2227,7 @@ class ReflectionEngine:
         }
 
     def _fallback_daily_activity_summary(self, key: str, turns: list[dict]) -> dict:
-        fallback_turn_ids, fallback_event_ids = self._daily_chat_memory_window_source_ids(turns)
+        fallback_turn_ids, fallback_event_ids = self._daily_chat_memory__source_ids(turns)
         snippets = []
         for turn in reversed(turns or []):
             snippet = self._daily_activity_summary_excerpt(turn.get("user_text") or turn.get("assistant_text") or "")
