@@ -4879,9 +4879,25 @@ class GatewayService:
 
     def _insert_memory_detail_context(self, messages: Any, detail_context: str) -> list[dict]:
         new_messages = deepcopy(messages) if isinstance(messages, list) else []
-        detail_message = {"role": "system", "content": detail_context}
-        insert_at = self._after_leading_system_index(new_messages)
-        new_messages.insert(insert_at, detail_message)
+        # 详情不再往「开头 system 之后」插一条 system（那会让整段对话前缀移位、
+        # 打散 OpenAI 风格前缀缓存），而是前置到最后一条 user 消息上：重试请求的
+        # messages 前缀与原请求完全一致，只有最后这条 user 消息是新增未命中，历史照常命中。
+        prefix = (
+            "<ombre_memory_detail>\n"
+            f"{detail_context}\n"
+            "</ombre_memory_detail>\n\n"
+        )
+        for message in reversed(new_messages):
+            if isinstance(message, dict) and message.get("role") == "user":
+                content = message.get("content")
+                if isinstance(content, str):
+                    message["content"] = prefix + content
+                elif isinstance(content, list):
+                    message["content"] = [{"type": "text", "text": prefix}, *deepcopy(content)]
+                else:
+                    message["content"] = prefix
+                return new_messages
+        new_messages.append({"role": "system", "content": detail_context})
         return new_messages
 
     async def _update_persona_after_response(
