@@ -137,6 +137,11 @@ class PersonaStateEngine:
             self.persona_cfg.get("session_mood_half_life_minutes", 90)
         )
         self.max_relationship_delta = float(self.persona_cfg.get("max_relationship_delta", 0.03))
+        self.relationship_regression_rate = self._clamp_float(
+            self.persona_cfg.get("relationship_regression_rate", 0.05),
+            0.0,
+            1.0,
+        )
         self.max_affect_delta = float(self.persona_cfg.get("max_affect_delta", 0.18))
         self.event_recording_enabled = self._coerce_bool(
             self.persona_cfg.get("event_recording_enabled"),
@@ -949,8 +954,14 @@ class PersonaStateEngine:
 
     def _apply_global_delta(self, state: dict, evaluation: dict, now: datetime) -> dict:
         updated = dict(state)
-        for key, delta in evaluation["relationship_delta"].items():
-            updated[key] = self._clamp_float(float(updated.get(key, self.default_relationship[key])) + delta)
+        relationship_delta = evaluation.get("relationship_delta", {})
+        rate = self.relationship_regression_rate
+        for key in self.RELATIONSHIP_KEYS:
+            current = float(updated.get(key, self.default_relationship[key]))
+            baseline = float(self.default_relationship[key])
+            # 先向基准人格回拉一小步，再叠加本轮 delta，打破"只涨不降"的单向累积
+            regressed = current + (baseline - current) * rate
+            updated[key] = self._clamp_float(regressed + float(relationship_delta.get(key, 0.0)))
         updated["updated_at"] = self._format_time(now)
 
         conn = self._connect()

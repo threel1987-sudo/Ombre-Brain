@@ -589,6 +589,10 @@ persona:
   global_decay_hours: 168
   session_mood_half_life_minutes: 90
   max_relationship_delta: 0.03
+  # 每个 relationship 值（affinity/dominance/defensiveness/trust）每轮向 initial_relationship
+  # 基准回拉的比例，用来打破"只涨不降"的单向累积。范围 0~1，越大回落越快；0 = 关闭回落。
+  # 注意：global_decay_hours 目前未被引擎实现，relationship 的实际回落由本项控制。
+  relationship_regression_rate: 0.05
   max_affect_delta: 0.18
   # Recent Persona Events is a sparse log, not a per-message transcript.
   # Evaluate numeric state once per N successful Gateway rounds.
