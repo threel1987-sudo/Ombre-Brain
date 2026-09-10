@@ -268,7 +268,7 @@ raw_events:
   max_ingest_batch: 1000
 
 # --- Private identity semantics / 私有身份语义 ---
-# Optional private canonical alias overlay. Do not put personal canonical nodes
+# Optional private canonical alias overlay. Do not put l canonical nodes
 # into this template; load them from a private YAML/JSON file or env var.
 # 可选私有 canonical/alias 覆盖层。不要把个人 canonical 写进模板；
 # 请通过私有 YAML/JSON 文件或环境变量加载。
@@ -381,10 +381,10 @@ gateway:
   domain_sentinel_enable_thinking: false   # forced false
   domain_sentinel_max_tokens: 260
   domain_sentinel_timeout_seconds: 4
-  date_persona_trace_enabled: true   # date words like 昨天/昨晚 add small same-day persona/original-turn trace
-  date_persona_trace_budget: 220
-  date_persona_trace_max_events: 5
-  date_persona_trace_include_daily: true
+  date__trace_enabled: true   # date words like 昨天/昨晚 add small same-day /original-turn trace
+  date__trace_budget: 220
+  date__trace_max_events: 5
+  date__trace_include_daily: true
   recalled_memory_budget: 900
   direct_render_mode: auto   # auto | compact | full; direct/recalled display shape
   retrieval_mode: graph       # graph | bucket; bucket skips moment graph diffusion
@@ -569,8 +569,8 @@ memory_relevance:
   blocked_facets: []
   section_hints: {}
 
-# --- Persona State Engine / 人格状态引擎 ---
-# Tracks relationship state and per-session affect. Personality drift is retired.
+# ---  State Engine / 人格状态引擎 ---
+# Tracks relationship state and per-session affect. lity drift is retired.
 # 追踪关系状态，以及按会话保存的短期情绪；不再数值化人格变化。
 persona:
   enabled: true
@@ -613,18 +613,18 @@ persona:
   conflict_nudge_timeout_seconds: 4
   initial_relationship:
     affinity: 0.86
-    dominance: 0.38
+    dominance: 0.76
     defensiveness: 0.12
-    trust: 0.82
+    trust: 0.86
   initial_affect:
-    valence: 0.56
-    arousal: 0.34
+    valence: 0.65
+    arousal: 0.55
     tenderness: 0.62
-    possessiveness: 0.24
+    possessiveness: 0.72
     longing: 0.34
-    security: 0.68
+    security: 0.75
     protective_drive: 0.52
-    libido: 0.18                 # tone temperature only; never action or consent inference
+    libido: 0.70                 # tone temperature only; never action or consent inference
     mood_label: "warm_neutral"
     session_defensiveness: 0.12
     residue: ""
