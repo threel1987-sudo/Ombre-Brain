@@ -824,7 +824,9 @@ class GatewayService:
         self.turn_injection_snapshot_ttl_seconds = 3600.0
         self.turn_injection_snapshot_max_per_session = 4
 
-        self.http_client = http_client or httpx.AsyncClient(timeout=60.0)
+        self.http_client = http_client or httpx.AsyncClient(
+    timeout=max(10.0, float(self.gateway_cfg.get("upstream_timeout_seconds", 60.0)))
+)
 
     async def close(self) -> None:
         if self.http_client and not getattr(self.http_client, "is_closed", False):
